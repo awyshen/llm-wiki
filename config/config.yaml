@@ -1,0 +1,161 @@
+# LLM Wiki 系统配置文件
+
+# 系统基本信息
+system:
+  name: "LLM Wiki - AI驱动个人知识库"
+  version: "1.0.0"
+  description: "基于Karpathy理念的个人知识管理系统"
+  language: "zh-CN"
+  debug: false
+  log_level: "INFO"
+
+# 数据路径配置
+paths:
+  data_dir: "./data"
+  raw_dir: "./data/raw"
+  wiki_dir: "./data/wiki"
+  backup_dir: "./data/backup"
+  temp_dir: "./data/temp"
+  logs_dir: "./logs"
+
+# 数据库配置
+database:
+  type: "sqlite"
+  url: "sqlite:///data/llm_wiki.db"
+  echo: false
+  pool_size: 10
+  max_overflow: 20
+  pool_timeout: 30
+  pool_recycle: 3600
+
+# 向量数据库配置
+vector_db:
+  enabled: true
+  type: "chroma"  # 可选: chroma, dashvector
+  path: "./data/vector_db"
+  collection_name: "llm_wiki"
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+  chunk_size: 512
+  chunk_overlap: 50
+
+# 嵌入服务配置
+embedding:
+  type: "local"  # 可选: local, openai, dashvector
+  dashvector_api_key: "${DASHVECTOR_API_KEY}"
+  dashvector_endpoint: "${DASHVECTOR_ENDPOINT}"
+
+# LLM配置
+llm:
+  # 默认提供商
+  default_provider: "openai"
+  
+  # OpenAI配置
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-4"
+    temperature: 0.3
+    max_tokens: 4096
+    timeout: 60
+    
+  # Anthropic配置
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+    model: "claude-3-opus-20240229"
+    temperature: 0.3
+    max_tokens: 4096
+    timeout: 60
+
+# 知识处理配置
+processing:
+  # 自动处理配置
+  auto_process: true
+  process_interval: 300  # 秒
+  
+  # 文件监控配置
+  file_watcher:
+    enabled: true
+    patterns: ["*.md", "*.txt", "*.pdf", "*.docx", "*.html"]
+    ignore_patterns: [".*", "~*", "*.tmp"]
+  
+  # 知识提取配置
+  extraction:
+    max_chunk_size: 2000
+    overlap_size: 200
+    min_chunk_size: 100
+    
+  # 实体识别配置
+  entity_extraction:
+    enabled: true
+    min_confidence: 0.7
+    entity_types:
+      - "人物"
+      - "组织"
+      - "地点"
+      - "概念"
+      - "技术"
+      - "项目"
+      - "事件"
+
+# 知识关联配置
+knowledge_graph:
+  enabled: true
+  min_similarity: 0.75
+  max_relations_per_entity: 10
+  auto_link: true
+
+# 索引配置
+indexing:
+  auto_index: true
+  index_interval: 3600  # 秒
+  full_text_search: true
+
+# 备份配置
+backup:
+  enabled: true
+  interval: 86400  # 秒 (每天)
+  max_backups: 7
+  compress: true
+
+# API服务配置
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 1
+  reload: false
+  cors_origins: ["http://localhost:3000", "http://127.0.0.1:3000"]
+  
+# Web界面配置
+webui:
+  enabled: true
+  type: "gradio"  # 可选: gradio, streamlit
+  port: 7860
+  share: false
+  
+# 安全配置
+security:
+  secret_key: "${SECRET_KEY}"
+  algorithm: "HS256"
+  access_token_expire_minutes: 1440  # 24小时
+  password_min_length: 8
+  max_login_attempts: 5
+  lockout_duration: 1800  # 秒
+
+# 性能配置
+performance:
+  max_concurrent_requests: 10
+  request_timeout: 120
+  cache_size: 1000
+  cache_ttl: 3600
+
+# 搜索配置
+search:
+  max_results: 50
+  timeout: 5
+  enable_semantic_search: true
+  enable_fuzzy_search: true
+  enable_history: true
+  max_history: 10
+  suggestion_min_length: 2
+  max_history_items: 10
+  max_search_results: 50
