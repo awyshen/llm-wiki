@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM Wiki 知识库管理系统</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>LLM Wiki 知识库管理系统</h1>
+            <p>版本: 1.0.0</p>
+        </header>
+
+        <nav class="nav">
+            <ul>
+                <li><a href="#import" class="nav-link">📄 文档导入</a></li>
+                <li><a href="#manage" class="nav-link">📄 文档管理</a></li>
+                <li><a href="#process" class="nav-link">⚙️ 文档处理</a></li>
+                <li><a href="#browse" class="nav-link">📚 Wiki浏览</a></li>
+                <li><a href="#search" class="nav-link">🔍 高级搜索</a></li>
+                <li><a href="#graph" class="nav-link">🧠 知识图谱</a></li>
+                <li><a href="#status" class="nav-link">📊 系统状态</a></li>
+            </ul>
+        </nav>
+
+        <main class="main">
+            <!-- 文档导入 -->
+            <section id="import" class="section">
+                <h2>📄 文档导入</h2>
+                <div class="card">
+                    <h3>导入文档到知识库</h3>
+                    <div class="form-group">
+                        <input type="file" id="file-input" multiple accept=".txt,.md,.pdf,.docx">
+                        <button id="import-btn" class="btn btn-primary">导入文档</button>
+                    </div>
+                    <div id="import-result" class="result"></div>
+                </div>
+            </section>
+
+            <!-- 文档管理 -->
+            <section id="manage" class="section" style="display: none;">
+                <h2>📄 文档管理</h2>
+                <div class="card">
+                    <div class="form-group">
+                        <button id="refresh-docs-btn" class="btn btn-primary">刷新文档列表</button>
+                        <select id="filter-status" class="select">
+                            <option value="全部">全部</option>
+                            <option value="pending">待处理</option>
+                            <option value="processing">处理中</option>
+                            <option value="completed">已完成</option>
+                            <option value="failed">失败</option>
+                        </select>
+                    </div>
+                    <div id="doc-list" class="table-container"></div>
+                    <div class="doc-detail">
+                        <h3 id="doc-title">文档标题</h3>
+                        <div id="doc-content" class="content"></div>
+                        <div id="doc-metadata" class="metadata"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 文档处理 -->
+            <section id="process" class="section" style="display: none;">
+                <h2>⚙️ 文档处理</h2>
+                <div class="card">
+                    <div class="form-group">
+                        <button id="process-btn" class="btn btn-primary">开始处理</button>
+                        <button id="stats-btn" class="btn btn-secondary">刷新统计</button>
+                    </div>
+                    <div id="process-result" class="result"></div>
+                </div>
+            </section>
+
+            <!-- Wiki浏览 -->
+            <section id="browse" class="section" style="display: none;">
+                <h2>📚 Wiki浏览</h2>
+                <div class="card">
+                    <div class="form-group">
+                        <input type="text" id="browse-search" placeholder="搜索页面" class="input">
+                        <button id="refresh-pages-btn" class="btn btn-primary">刷新列表</button>
+                    </div>
+                    <select id="category-filter" class="select">
+                        <option value="全部">全部</option>
+                    </select>
+                    <div id="page-list" class="table-container"></div>
+                    <div class="page-detail">
+                        <h3 id="page-title">页面标题</h3>
+                        <div id="page-content" class="content"></div>
+                        <div id="page-metadata" class="metadata"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 高级搜索 -->
+            <section id="search" class="section" style="display: none;">
+                <h2>🔍 高级搜索</h2>
+                <div class="card">
+                    <h3>搜索选项</h3>
+                    <div class="form-group">
+                        <input type="text" id="search-input" placeholder="输入搜索内容" class="input">
+                        <button id="search-btn" class="btn btn-primary">搜索</button>
+                        <button id="clear-btn" class="btn btn-secondary">清空</button>
+                    </div>
+                    <div class="form-group">
+                        <select id="search-category" class="select">
+                            <option value="全部">分类</option>
+                        </select>
+                        <select id="search-page-type" class="select">
+                            <option value="全部">页面类型</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label><input type="radio" name="sort-by" value="相关性" checked> 相关性</label>
+                        <label><input type="radio" name="sort-by" value="时间"> 时间</label>
+                        <label><input type="radio" name="sort-by" value="热度"> 热度</label>
+                    </div>
+                    <div class="form-group">
+                        <label><input type="checkbox" id="include-semantic" checked> 语义搜索</label>
+                        <label><input type="checkbox" id="include-fuzzy" checked> 模糊搜索</label>
+                    </div>
+                    <h3>搜索历史</h3>
+                    <div id="search-history" class="table-container"></div>
+                    <button id="clear-history-btn" class="btn btn-secondary">清空历史</button>
+                    <h3>搜索结果</h3>
+                    <div id="search-results" class="table-container"></div>
+                    <div id="search-info" class="info"></div>
+                </div>
+            </section>
+
+            <!-- 知识图谱 -->
+            <section id="graph" class="section" style="display: none;">
+                <h2>🧠 知识图谱</h2>
+                <div class="card">
+                    <div class="form-group">
+                        <input type="text" id="entity-input" placeholder="起始实体ID (可选)" class="input">
+                        <input type="range" id="max-nodes" min="10" max="100" value="50" step="10">
+                        <label for="max-nodes">最大节点数: 50</label>
+                        <button id="refresh-graph-btn" class="btn btn-primary">刷新图谱</button>
+                    </div>
+
+                    <h3>路径查询</h3>
+                    <div class="form-group">
+                        <input type="text" id="start-entity" placeholder="起始实体ID" class="input">
+                        <input type="text" id="end-entity" placeholder="目标实体ID" class="input">
+                        <input type="range" id="max-depth" min="1" max="5" value="3" step="1">
+                        <label for="max-depth">最大深度: 3</label>
+                        <button id="find-path-btn" class="btn btn-secondary">查找路径</button>
+                    </div>
+
+                    <h3>相关实体</h3>
+                    <div class="form-group">
+                        <input type="text" id="related-entity" placeholder="实体ID" class="input">
+                        <input type="range" id="search-depth" min="1" max="3" value="2" step="1">
+                        <label for="search-depth">搜索深度: 2</label>
+                        <button id="get-related-btn" class="btn btn-secondary">获取相关实体</button>
+                    </div>
+
+                    <div id="graph-stats" class="stats"></div>
+
+                    <h3>导出功能</h3>
+                    <div class="form-group">
+                        <select id="export-format" class="select">
+                            <option value="json">JSON</option>
+                            <option value="csv">CSV</option>
+                        </select>
+                        <button id="export-btn" class="btn btn-secondary">导出图谱</button>
+                    </div>
+                    <div id="export-output" class="output"></div>
+
+                    <div id="graph-container" class="graph-container"></div>
+                </div>
+            </section>
+
+            <!-- 系统状态 -->
+            <section id="status" class="section" style="display: none;">
+                <h2>📊 系统状态</h2>
+                <div class="card">
+                    <div id="system-stats" class="stats"></div>
+                </div>
+            </section>
+        </main>
+
+        <footer class="footer">
+            <p>&copy; 2026 LLM Wiki 知识库管理系统</p>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

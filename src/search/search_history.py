@@ -2,6 +2,7 @@ import json
 import os
 from datetime import datetime
 
+
 class SearchHistory:
     def __init__(self):
         self.history_file = "./data/search_history.json"
@@ -14,10 +15,15 @@ class SearchHistory:
     def add(self, query, filters=None, results_count=0):
         history = self.get_all()
         history = [h for h in history if h["query"] != query]
-        new_item = {"query": query, "filters": filters or {}, "results_count": results_count, "timestamp": datetime.now().isoformat()}
+        new_item = {
+            "query": query,
+            "filters": filters or {},
+            "results_count": results_count,
+            "timestamp": datetime.now().isoformat(),
+        }
         history.insert(0, new_item)
         if len(history) > self.max_history:
-            history = history[:self.max_history]
+            history = history[: self.max_history]
         with open(self.history_file, "w") as ff:
             json.dump(history, ff)
         return True

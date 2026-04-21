@@ -1,0 +1,63 @@
+# LLM Wiki 配置文件
+
+system:
+  name: "LLM Wiki"
+  language: "zh-CN"
+  log_level: "INFO"
+
+# 应用配置
+app:
+  host: "0.0.0.0"  # 服务器主机
+  port: 5000  # 服务器端口
+  debug: false  # 调试模式
+
+# LLM 配置
+llm:
+  openai:
+    api_key: "${OPENAI_API_KEY}"  # LLM API密钥
+    api_base_url: "https://api.openai.com/v1"  # LLM API基础URL
+    model: "gpt-3.5-turbo"  # LLM模型
+    temperature: 0.7  # 温度参数
+    max_tokens: 4096  # 最大token数
+
+# 向量存储配置
+vector_store:
+  type: "chroma"  # 向量存储类型
+  path: "./data/vector_db"  # 向量存储路径
+  embedding_model: "text-embedding-ada-002"  # 嵌入模型
+  collection_name: "llm_wiki"  # 集合名称
+
+# 数据目录
+data_dir: "./data"
+
+# Wiki目录
+wiki_dir: "./wiki"
+
+# 日志级别
+log_level: "INFO"
+
+ 数据库配置
+database:
+  url: "sqlite:///./data/llm_wiki.db"  # 数据库连接URL
+  echo: false  # 是否打印SQL语句
+  pool_size: 5  # 连接池大小
+  max_overflow: 10  # 最大溢出连接数
+  pool_timeout: 30  # 连接池超时时间（秒）
+  pool_recycle: 3600  # 连接回收时间（秒）
+
+# 性能配置
+performance:
+  cache_size: 1000  # 缓存大小
+  batch_size: 32  # 批处理大小
+  max_workers: 4  # 最大工作线程数
+
+# 处理配置
+processing:
+  extraction:
+    max_chunk_size: 2000  # 最大 chunk 大小
+    min_chunk_size: 500  # 最小 chunk 大小
+  embedding:
+    batch_size: 32  # 嵌入批处理大小
+  llm:
+    max_tokens: 1000  # 最大 token 数
+    temperature: 0.7  # 温度参数

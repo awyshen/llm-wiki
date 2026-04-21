@@ -1,368 +1,352 @@
 """
-配置管理模块
+配置管理
 
-负责加载和管理系统配置，支持YAML配置文件和环境变量覆盖。
+提供配置加载、管理和访问功能。
 """
 
 import os
-import re
 import yaml
-from pathlib import Path
-from typing import Any, Dict, Optional, List
-from dataclasses import dataclass, field
-from functools import lru_cache
+import time
+from typing import Dict, Any, Optional, Union, Callable
+from pydantic import BaseModel, Field, validator
 
 
-@dataclass
-class SystemConfig:
-    """系统基础配置"""
-    name: str = "LLM Wiki - AI驱动个人知识库"
-    version: str = "1.0.0"
-    description: str = "基于Karpathy理念的个人知识管理系统"
-    language: str = "zh-CN"
-    debug: bool = False
-    log_level: str = "INFO"
+class BaseConfig(BaseModel):
+    """基础配置模型"""
+    pass
 
 
-@dataclass
-class PathsConfig:
-    """路径配置"""
-    data_dir: str = "./data"
-    raw_dir: str = "./data/raw"
-    wiki_dir: str = "./data/wiki"
-    backup_dir: str = "./data/backup"
-    temp_dir: str = "./data/temp"
-    logs_dir: str = "./logs"
+class AppConfig(BaseConfig):
+    """应用配置"""
+    host: str = Field(default="0.0.0.0", description="服务器主机")
+    port: int = Field(default=5000, description="服务器端口")
+    debug: bool = Field(default=False, description="调试模式")
 
 
-@dataclass
-class DatabaseConfig:
-    """数据库配置"""
-    type: str = "sqlite"
-    url: str = "sqlite:///data/llm_wiki.db"
-    echo: bool = False
-    pool_size: int = 10
-    max_overflow: int = 20
-    pool_timeout: int = 30
-    pool_recycle: int = 3600
+class OpenAIConfig(BaseConfig):
+    api_key: str = Field(default="", description="LLM API密钥")
+    api_base_url: str = Field(default="", description="LLM API基础URL")
+    model: str = Field(default="gpt-3.5-turbo", description="LLM模型")
+    temperature: float = Field(default=0.7, ge=0.0, le=1.0, description="温度参数")
+    max_tokens: int = Field(default=1000, ge=1, description="最大token数")
 
+class AnthropicConfig(BaseConfig):
+    """Anthropic配置"""
+    api_key: str = Field(default="", description="Anthropic API密钥")
+    model: str = Field(default="claude-v1", description="Anthropic模型")
+    temperature: float = Field(default=0.7, ge=0.0, le=1.0, description="温度参数")
+    max_tokens: int = Field(default=1000, ge=1, description="最大token数")
 
-@dataclass
-class VectorDBConfig:
-    """向量数据库配置"""
-    enabled: bool = True
-    type: str = "chroma"
-    path: str = "./data/vector_db"
-    collection_name: str = "llm_wiki"
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
-    chunk_size: int = 512
-    chunk_overlap: int = 50
-
-
-@dataclass
-class EmbeddingConfig:
-    """嵌入服务配置"""
-    type: str = "local"
-    dashvector_api_key: str = ""
-    dashvector_endpoint: str = ""
-
-
-@dataclass
-class LLMProviderConfig:
-    """LLM提供商配置"""
-    api_key: str = ""
-    base_url: str = ""
-    model: str = "gpt-4"
-    temperature: float = 0.3
-    max_tokens: int = 4096
-    timeout: int = 60
-
-
-@dataclass
-class LLMConfig:
+class LLMConfig(BaseConfig):
     """LLM配置"""
-    default_provider: str = "openai"
-    openai: LLMProviderConfig = field(default_factory=lambda: LLMProviderConfig())
-    anthropic: LLMProviderConfig = field(default_factory=lambda: LLMProviderConfig(
-        model="claude-3-opus-20240229"
-    ))
+    openai: OpenAIConfig = Field(default_factory=OpenAIConfig, description="OpenAI配置")
+    anthropic: AnthropicConfig = Field(default_factory=AnthropicConfig, description="Anthropic配置")
 
 
-@dataclass
-class ProcessingConfig:
-    """知识处理配置"""
-    auto_process: bool = True
-    process_interval: int = 300
+class VectorStoreConfig(BaseConfig):
+    """向量存储配置"""
+    type: str = Field(default="chroma", description="向量存储类型")
+    path: str = Field(default="./data/vector_db", description="向量存储路径")
+    embedding_model: str = Field(default="text-embedding-ada-002", description="嵌入模型")
+    collection_name: str = Field(default="llm_wiki", description="集合名称")
+    # dashvector配置, type 类型为 dashvector
+    # dashvector_api_key: str = Field(default="", description="dashvector API密钥")
+    # dashvector_endpoint: str = Field(default="", description="dashvector Cluster Endpoint")
 
 
-@dataclass
-class FileWatcherConfig:
-    """文件监控配置"""
-    enabled: bool = True
-    patterns: List[str] = field(default_factory=lambda: ["*.md", "*.txt", "*.pdf", "*.docx", "*.html"])
-    ignore_patterns: List[str] = field(default_factory=lambda: [".*", "~*", "*.tmp"])
+class DatabaseConfig(BaseConfig):
+    """数据库配置"""
+    url: str = Field(default="sqlite:///./data/llm_wiki.db", description="数据库连接URL")
+    echo: bool = Field(default=False, description="是否打印SQL语句")
+    pool_size: int = Field(default=5, description="连接池大小")
+    max_overflow: int = Field(default=10, description="最大溢出连接数")
+    pool_timeout: int = Field(default=30, description="连接池超时时间（秒）")
+    pool_recycle: int = Field(default=3600, description="连接回收时间（秒）")
 
 
-@dataclass
-class ExtractionConfig:
-    """知识提取配置"""
-    max_chunk_size: int = 2000
-    overlap_size: int = 200
-    min_chunk_size: int = 100
-
-
-@dataclass
-class EntityExtractionConfig:
-    """实体识别配置"""
-    enabled: bool = True
-    min_confidence: float = 0.7
-    entity_types: List[str] = field(default_factory=lambda: [
-        "人物", "组织", "地点", "概念", "技术", "项目", "事件"
-    ])
-
-
-@dataclass
-class KnowledgeGraphConfig:
-    """知识图谱配置"""
-    enabled: bool = True
-    min_similarity: float = 0.75
-    max_relations_per_entity: int = 10
-    auto_link: bool = True
-
-
-@dataclass
-class BackupConfig:
-    """备份配置"""
-    enabled: bool = True
-    interval: int = 86400
-    max_backups: int = 7
-    compress: bool = True
-
-
-@dataclass
-class APIConfig:
-    """API服务配置"""
-    host: str = "0.0.0.0"
-    port: int = 8000
-    workers: int = 1
-    reload: bool = False
-    cors_origins: List[str] = field(default_factory=lambda: [
-        "http://localhost:3000", "http://127.0.0.1:3000"
-    ])
-
-
-@dataclass
-class WebUIConfig:
-    """Web界面配置"""
-    enabled: bool = True
-    type: str = "gradio"
-    port: int = 7860
-    share: bool = False
-
-
-@dataclass
-class SecurityConfig:
-    """安全配置"""
-    secret_key: str = ""
-    algorithm: str = "HS256"
-    access_token_expire_minutes: int = 1440
-    password_min_length: int = 8
-    max_login_attempts: int = 5
-    lockout_duration: int = 1800
-
-
-@dataclass
-class PerformanceConfig:
+class PerformanceConfig(BaseConfig):
     """性能配置"""
-    max_concurrent_requests: int = 10
-    request_timeout: int = 120
-    cache_size: int = 1000
-    cache_ttl: int = 3600
+    cache_size: int = Field(default=1000, description="缓存大小")
+    batch_size: int = Field(default=32, description="批处理大小")
+    max_workers: int = Field(default=4, description="最大工作线程数")
 
 
-@dataclass
-class SearchConfig:
-    """搜索配置"""
-    max_results: int = 50
-    timeout: int = 5
-    enable_semantic_search: bool = True
-    enable_fuzzy_search: bool = True
-    enable_history: bool = True
-    max_history: int = 10
+class ExtractionConfig(BaseConfig):
+    """提取配置"""
+    max_chunk_size: int = Field(default=2000, description="最大 chunk 大小")
+    min_chunk_size: int = Field(default=500, description="最小 chunk 大小")
+
+
+class EmbeddingConfig(BaseConfig):
+    """嵌入配置"""
+    batch_size: int = Field(default=32, description="嵌入批处理大小")
+
+
+class ProcessingLLMConfig(BaseConfig):
+    """处理LLM配置"""
+    max_tokens: int = Field(default=1000, description="最大 token 数")
+    temperature: float = Field(default=0.7, description="温度参数")
+
+
+class ProcessingConfig(BaseConfig):
+    """处理配置"""
+    extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
+    llm: ProcessingLLMConfig = Field(default_factory=ProcessingLLMConfig)
+
+class SystemConfig(BaseConfig):
+    """系统配置"""
+    name: str = Field(default="LLM Wiki", description="系统名称")
+    version: str = Field(default="1.0.0", description="系统版本")
+    language: str = Field(default="zh-CN", description="系统语言")
+    log_level: str = Field(default="INFO", description="日志级别")
+
+class WebuiConfig(BaseConfig):
+    """WebUI配置"""
+    host: str = Field(default="0.0.0.0", description="WebUI主机")
+    port: int = Field(default=7860, description="WebUI端口")
+    debug: bool = Field(default=False, description="调试模式")
+    share: bool = Field(default=False, description="gradio share")
+
+class ConfigSchema(BaseModel):
+    """配置模式"""
+    system: SystemConfig = Field(default_factory=SystemConfig)
+    app: AppConfig = Field(default_factory=AppConfig)
+    webui: WebuiConfig = Field(default_factory=WebuiConfig)
+    llm: LLMConfig = Field(default_factory=LLMConfig)
+    vector_store: VectorStoreConfig = Field(default_factory=VectorStoreConfig)
+    database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    performance: PerformanceConfig = Field(default_factory=PerformanceConfig)
+    processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
+    data_dir: str = Field(default="./data", description="数据目录")
+    wiki_dir: str = Field(default="./wiki", description="Wiki目录")
+    log_level: str = Field(default="INFO", description="日志级别")
 
 
 class Config:
-    """主配置类"""
-    
-    def __init__(self, config_path: Optional[str] = None):
-        self.system = SystemConfig()
-        self.paths = PathsConfig()
-        self.database = DatabaseConfig()
-        self.vector_db = VectorDBConfig()
-        self.embedding = EmbeddingConfig()
-        self.llm = LLMConfig()
-        self.processing = ProcessingConfig()
-        self.file_watcher = FileWatcherConfig()
-        self.extraction = ExtractionConfig()
-        self.entity_extraction = EntityExtractionConfig()
-        self.knowledge_graph = KnowledgeGraphConfig()
-        self.backup = BackupConfig()
-        self.api = APIConfig()
-        self.webui = WebUIConfig()
-        self.security = SecurityConfig()
-        self.performance = PerformanceConfig()
-        self.search = SearchConfig()
-        
-        if config_path:
-            self.load_from_file(config_path)
+    """配置类
+
+    支持通过属性访问和字典访问两种方式获取配置值。
+    对于嵌套配置，会自动返回新的Config对象。
+    """
+
+    def __init__(self, config_dict: Dict[str, Any], is_nested: bool = False):
+        """
+        初始化配置对象
+
+        Args:
+            config_dict: 配置字典
+            is_nested: 是否为嵌套配置
+        """
+        if not is_nested:
+            # 只对根配置进行验证
+            self._schema = ConfigSchema(**config_dict)
+            self._config = self._schema.dict()
         else:
-            # 尝试加载默认配置文件
-            default_paths = [
-                "./config/config.yaml",
-                "../config/config.yaml",
-                "/etc/llm-wiki/config.yaml",
-            ]
-            for path in default_paths:
-                if os.path.exists(path):
-                    self.load_from_file(path)
-                    break
-    
-    def load_from_file(self, path: str) -> None:
-        """从YAML文件加载配置"""
-        with open(path, 'r', encoding='utf-8') as f:
-            data = yaml.safe_load(f)
-        
-        if data:
-            self._update_from_dict(data)
-    
-    def _update_from_dict(self, data: Dict[str, Any]) -> None:
-        """从字典更新配置"""
-        # 处理系统配置
-        if 'system' in data:
-            self._update_dataclass(self.system, data['system'])
-        
-        # 处理路径配置
-        if 'paths' in data:
-            self._update_dataclass(self.paths, data['paths'])
-        
-        # 处理数据库配置
-        if 'database' in data:
-            self._update_dataclass(self.database, data['database'])
-        
-        # 处理向量数据库配置
-        if 'vector_db' in data:
-            self._update_dataclass(self.vector_db, data['vector_db'])
-        
-        # 处理嵌入服务配置
-        if 'embedding' in data:
-            self._update_dataclass(self.embedding, data['embedding'])
-        
-        # 处理LLM配置
-        if 'llm' in data:
-            llm_data = data['llm']
-            if 'default_provider' in llm_data:
-                self.llm.default_provider = llm_data['default_provider']
-            if 'openai' in llm_data:
-                self._update_dataclass(self.llm.openai, llm_data['openai'])
-            if 'anthropic' in llm_data:
-                self._update_dataclass(self.llm.anthropic, llm_data['anthropic'])
-        
-        # 处理其他配置...
-        if 'processing' in data:
-            self._update_dataclass(self.processing, data['processing'])
-        if 'file_watcher' in data:
-            self._update_dataclass(self.file_watcher, data['file_watcher'])
-        if 'extraction' in data:
-            self._update_dataclass(self.extraction, data['extraction'])
-        if 'entity_extraction' in data:
-            self._update_dataclass(self.entity_extraction, data['entity_extraction'])
-        if 'knowledge_graph' in data:
-            self._update_dataclass(self.knowledge_graph, data['knowledge_graph'])
-        if 'backup' in data:
-            self._update_dataclass(self.backup, data['backup'])
-        if 'api' in data:
-            self._update_dataclass(self.api, data['api'])
-        if 'webui' in data:
-            self._update_dataclass(self.webui, data['webui'])
-        if 'security' in data:
-            self._update_dataclass(self.security, data['security'])
-        if 'performance' in data:
-            self._update_dataclass(self.performance, data['performance'])
-        if 'search' in data:
-            self._update_dataclass(self.search, data['search'])
-        
-        # 处理环境变量覆盖
-        self._apply_env_overrides()
-    
-    def _update_dataclass(self, obj: Any, data: Dict[str, Any]) -> None:
-        """更新数据类实例"""
-        for key, value in data.items():
-            if hasattr(obj, key):
-                # 处理环境变量引用 ${VAR_NAME}
-                if isinstance(value, str):
-                    value = self._resolve_env_vars(value)
-                setattr(obj, key, value)
-    
-    def _resolve_env_vars(self, value: str) -> str:
-        """解析环境变量引用"""
-        pattern = r'\$\{([^}]+)\}'
-        
-        def replace_var(match):
-            var_name = match.group(1)
-            return os.environ.get(var_name, match.group(0))
-        
-        return re.sub(pattern, replace_var, value)
-    
-    def _apply_env_overrides(self) -> None:
-        """应用环境变量覆盖"""
-        # OpenAI API Key
-        if os.environ.get('OPENAI_API_KEY'):
-            self.llm.openai.api_key = os.environ['OPENAI_API_KEY']
-        
-        # Anthropic API Key
-        if os.environ.get('ANTHROPIC_API_KEY'):
-            self.llm.anthropic.api_key = os.environ['ANTHROPIC_API_KEY']
-        
-        # DashVector API Key
-        if os.environ.get('DASHVECTOR_API_KEY'):
-            self.embedding.dashvector_api_key = os.environ['DASHVECTOR_API_KEY']
-        
-        if os.environ.get('DASHVECTOR_ENDPOINT'):
-            self.embedding.dashvector_endpoint = os.environ['DASHVECTOR_ENDPOINT']
-        
-        # Secret Key
-        if os.environ.get('SECRET_KEY'):
-            self.security.secret_key = os.environ['SECRET_KEY']
-    
-    def ensure_directories(self) -> None:
-        """确保所有必要的目录存在"""
-        dirs = [
-            self.paths.data_dir,
-            self.paths.raw_dir,
-            self.paths.wiki_dir,
-            self.paths.backup_dir,
-            self.paths.temp_dir,
-            self.paths.logs_dir,
-        ]
-        for dir_path in dirs:
-            Path(dir_path).mkdir(parents=True, exist_ok=True)
-    
+            # 嵌套配置直接使用字典
+            self._config = config_dict
+        self._last_loaded = time.time()
+
+    def __getattr__(self, name: str) -> Any:
+        """
+        通过属性访问获取配置值
+
+        Args:
+            name: 配置项名称
+
+        Returns:
+            配置值，如果是字典则返回Config对象
+
+        Raises:
+            AttributeError: 如果配置项不存在
+        """
+        if name in self._config:
+            value = self._config[name]
+            if isinstance(value, dict):
+                return Config(value, is_nested=True)
+            return value
+        raise AttributeError(f"Config object has no attribute '{name}'")
+
+    def __getitem__(self, name: str) -> Any:
+        """
+        通过字典访问获取配置值
+
+        Args:
+            name: 配置项名称
+
+        Returns:
+            配置值，如果是字典则返回Config对象
+        """
+        if name in self._config:
+            value = self._config[name]
+            if isinstance(value, dict):
+                return Config(value, is_nested=True)
+            return value
+        raise KeyError(f"Config key '{name}' not found")
+
+    def get(self, name: str, default: Any = None) -> Any:
+        """
+        获取配置值，支持默认值
+
+        Args:
+            name: 配置项名称
+            default: 默认值
+
+        Returns:
+            配置值或默认值，如果是字典则返回Config对象
+        """
+        if name in self._config:
+            value = self._config[name]
+            if isinstance(value, dict):
+                return Config(value, is_nested=True)
+            return value
+        return default
+
     def to_dict(self) -> Dict[str, Any]:
-        """将配置转换为字典"""
-        def dataclass_to_dict(obj):
-            if isinstance(obj, (list, tuple)):
-                return [dataclass_to_dict(item) for item in obj]
-            elif isinstance(obj, dict):
-                return {k: dataclass_to_dict(v) for k, v in obj.items()}
-            elif hasattr(obj, '__dataclass_fields__'):
-                return {k: dataclass_to_dict(v) for k, v in obj.__dict__.items()}
-            else:
-                return obj
-        
-        return dataclass_to_dict(self.__dict__)
+        """
+        将配置转换为字典
+
+        Returns:
+            配置字典
+        """
+        return self._config
+
+    @property
+    def last_loaded(self) -> float:
+        """
+        获取最后加载时间
+
+        Returns:
+            最后加载时间戳
+        """
+        return self._last_loaded
 
 
-@lru_cache()
-def get_config(config_path: Optional[str] = None) -> Config:
-    """获取配置单例"""
-    return Config(config_path)
+def _replace_env_vars(obj: Any) -> Any:
+    """
+    替换环境变量
+
+    Args:
+        obj: 要处理的对象
+
+    Returns:
+        处理后的对象
+    """
+    if isinstance(obj, dict):
+        return {k: _replace_env_vars(v) for k, v in obj.items()}
+    elif isinstance(obj, str) and obj.startswith("${") and obj.endswith("}"):
+        env_var = obj[2:-1]
+        return os.environ.get(env_var, obj)
+    return obj
+
+
+# 配置缓存
+_config_cache: Dict[str, Config] = {}
+_config_mtime: Dict[str, float] = {}
+
+
+def load_config(config_path: str = "config/config.yaml") -> Config:
+    """
+    加载配置文件
+
+    Args:
+        config_path: 配置文件路径
+
+    Returns:
+        配置对象
+    """
+    try:
+        # 检查文件是否存在
+        if not os.path.exists(config_path):
+            # 如果配置文件不存在，返回默认配置
+            return Config({})
+
+        # 检查文件修改时间
+        mtime = os.path.getmtime(config_path)
+        if config_path in _config_cache and _config_mtime.get(config_path, 0) >= mtime:
+            return _config_cache[config_path]
+
+        with open(config_path, "r", encoding="utf-8") as f:
+            config_dict = yaml.safe_load(f)
+
+        if config_dict is None:
+            config_dict = {}
+
+        # 替换环境变量
+        config_dict = _replace_env_vars(config_dict)
+        config = Config(config_dict)
+
+        # 更新缓存
+        _config_cache[config_path] = config
+        _config_mtime[config_path] = mtime
+
+        return config
+    except FileNotFoundError:
+        # 文件不存在时返回默认配置
+        return Config({})
+    except yaml.YAMLError as e:
+        raise ValueError(f"配置文件格式错误: {e}")
+
+
+# 全局配置实例
+config = load_config()
+
+
+def get_config() -> Config:
+    """
+    获取全局配置对象
+
+    Returns:
+        配置对象
+    """
+    return config
+
+
+def reload_config(config_path: str = "config/config.yaml") -> Config:
+    """
+    重新加载配置
+
+    Args:
+        config_path: 配置文件路径
+
+    Returns:
+        新的配置对象
+    """
+    global config
+    # 清除缓存
+    if config_path in _config_cache:
+        del _config_cache[config_path]
+        del _config_mtime[config_path]
+    config = load_config(config_path)
+    return config
+
+
+def watch_config(config_path: str = "config/config.yaml", callback: Optional[Callable] = None):
+    """
+    监视配置文件变化
+
+    Args:
+        config_path: 配置文件路径
+        callback: 配置变化时的回调函数
+    """
+    import threading
+    import time
+
+    def watcher():
+        last_mtime = 0
+        while True:
+            if os.path.exists(config_path):
+                current_mtime = os.path.getmtime(config_path)
+                if current_mtime > last_mtime:
+                    last_mtime = current_mtime
+                    reload_config(config_path)
+                    if callback:
+                        callback()
+            time.sleep(5)  # 每5秒检查一次
+
+    thread = threading.Thread(target=watcher, daemon=True)
+    thread.start()
+
+
+# 配置文件路径
+CONFIG_PATH = os.environ.get("LLM_WIKI_CONFIG", "config/config.yaml")

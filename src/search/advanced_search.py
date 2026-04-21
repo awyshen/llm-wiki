@@ -1,418 +1,506 @@
 """
-高级搜索模块
+高级搜索功能
 
-提供语义搜索、多条件搜索、模糊搜索等高级搜索功能，支持搜索结果排序和过滤。
+支持全文搜索、语义搜索、实体关联查询等高级搜索功能。
 """
 
-import time
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
-
+from typing import List, Dict, Any, Optional, Tuple
 from ..core.config import get_config
 from ..core.logger import get_logger
 from ..storage.database import get_db_manager
-from ..storage.models import Document, WikiPage, Entity, Tag
-from ..storage.vector import get_vector_store
+from ..storage.models import WikiPage, Document
+from ..storage.vector.chroma import ChromaVectorStore
+from ..process.llm_entity_extractor import get_llm_entity_extractor
 
 logger = get_logger(__name__)
 
 
-@dataclass
-class SearchResult:
-    """搜索结果数据结构"""
-    id: str
-    title: str
-    type: str  # document, wiki_page, entity
-    content: str
-    score: float
-    metadata: Dict[str, Any]
-
-
 class AdvancedSearch:
-    """
-    高级搜索类
-    
-    支持多种搜索模式：
-    - 语义搜索：基于向量相似度计算
-    - 全文搜索：基于数据库查询
-    - 模糊搜索：支持拼音、首字母缩写匹配
-    
-    支持搜索结果排序：
-    - 相关性：基于相似度分数
-    - 时间：基于创建/更新时间
-    - 热度：基于访问频次
-    """
-    
+    """高级搜索类"""
+
     def __init__(self):
         self.config = get_config()
         self.db = get_db_manager()
-        self.vector_store = get_vector_store()
-    
-    def search(
-        self,
-        query: str,
-        filters: Optional[Dict[str, Any]] = None,
-        top_k: int = 20,
-        include_semantic: bool = True,
-        include_fuzzy: bool = True,
-        sort_by: str = "relevance"
-    ) -> List[SearchResult]:
-        """
-        执行高级搜索
+        self.entity_extractor = get_llm_entity_extractor()
         
+        # 初始化向量存储
+        try:
+            self.vector_store = ChromaVectorStore()
+            logger.info("向量存储初始化成功")
+        except Exception as e:
+            logger.warning(f"向量存储初始化失败: {e}")
+            self.vector_store = None
+
+    def search(self, query: str, filters: Optional[Dict[str, Any]] = None, top_k: int = 20, hybrid_weight: float = 0.5, include_semantic: bool = True, include_fuzzy: bool = True, sort_by: str = "relevance") -> List[Dict[str, Any]]:
+        """
+        搜索知识库
+
         Args:
             query: 搜索关键词
-            filters: 过滤条件字典，支持按分类、类型等筛选
-            top_k: 返回结果数量限制
-            include_semantic: 是否启用语义搜索
-            include_fuzzy: 是否启用模糊搜索
+            filters: 过滤条件
+            top_k: 返回结果数量
+            hybrid_weight: 混合搜索权重，0表示纯关键词搜索，1表示纯语义搜索
+            include_semantic: 是否包含语义搜索
+            include_fuzzy: 是否包含模糊搜索
             sort_by: 排序方式 (relevance, time, popularity)
-        
+
         Returns:
-            搜索结果列表，按指定方式排序
+            搜索结果列表
         """
-        start_time = time.time()
-        results = []
+        logger.info(f"搜索查询: {query}, 过滤条件: {filters}")
+
+        # 提取查询中的实体
+        query_entities = self.entity_extractor.extract_entities(query)
+        logger.debug(f"从查询中提取到 {len(query_entities)} 个实体")
+
+        # 关键词搜索结果
+        keyword_results = self._keyword_search(query, top_k, filters)
         
-        # 1. 语义搜索（基于向量数据库）
-        if include_semantic and self.config.search.enable_semantic_search:
-            semantic_results = self._semantic_search(query, filters, top_k)
-            results.extend(semantic_results)
-            logger.debug(f"语义搜索完成，找到 {len(semantic_results)} 条结果")
+        # 语义搜索结果
+        semantic_results = []
+        if self.vector_store and include_semantic:
+            semantic_results = self._semantic_search(query, top_k)
         
-        # 2. 全文搜索（基于数据库）
-        full_text_results = self._full_text_search(query, filters, top_k)
-        results.extend(full_text_results)
-        logger.debug(f"全文搜索完成，找到 {len(full_text_results)} 条结果")
-        
-        # 3. 模糊搜索（支持拼音、首字母）
-        if include_fuzzy and self.config.search.enable_fuzzy_search:
-            fuzzy_results = self._fuzzy_search(query, filters, top_k)
-            results.extend(fuzzy_results)
-            logger.debug(f"模糊搜索完成，找到 {len(fuzzy_results)} 条结果")
-        
-        # 4. 去重处理
-        unique_results = self._deduplicate_results(results)
-        logger.debug(f"去重后剩余 {len(unique_results)} 条结果")
-        
-        # 5. 排序处理
-        sorted_results = self._sort_results(unique_results, sort_by)
-        
-        # 6. 限制结果数量
-        final_results = sorted_results[:top_k]
-        
-        logger.info(f"搜索完成，耗时: {time.time() - start_time:.3f}秒, 结果数: {len(final_results)}")
-        
+        # 混合搜索结果
+        hybrid_results = self._hybrid_search(keyword_results, semantic_results, hybrid_weight)
+
+        # 基于实体匹配增强结果
+        if query_entities:
+            hybrid_results = self._enhance_results_with_entities(hybrid_results, query_entities)
+
+        # 应用过滤条件
+        if filters:
+            hybrid_results = self._apply_filters(hybrid_results, filters)
+
+        # 排序
+        hybrid_results = self._sort_results(hybrid_results, sort_by)
+
+        # 限制返回结果数量
+        final_results = hybrid_results[:top_k]
+
+        logger.info(f"搜索完成，找到 {len(final_results)} 个结果")
         return final_results
-    
-    def _semantic_search(self, query: str, filters: Dict[str, Any], top_k: int) -> List[SearchResult]:
+
+    def _keyword_search(self, query: str, top_k: int = 20, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """
-        语义搜索：基于向量相似度计算
-        
+        关键词搜索
+
         Args:
-            query: 搜索查询
+            query: 搜索关键词
+            top_k: 返回结果数量
             filters: 过滤条件
-            top_k: 返回数量
-        
+
         Returns:
             搜索结果列表
         """
-        try:
-            vector_results = self.vector_store.search(query, top_k=top_k, filter=filters)
+        results = []
+
+        with self.db.get_session() as session:
+            # 搜索Wiki页面
+            wiki_query = session.query(WikiPage).filter(
+                WikiPage.title.contains(query) | WikiPage.content.contains(query)
+            )
             
-            results = []
-            for doc_id, score, metadata in vector_results:
-                results.append(SearchResult(
-                    id=doc_id,
-                    title=metadata.get('title', 'Unknown'),
-                    type=metadata.get('type', 'document'),
-                    content=metadata.get('content', '')[:200] + '...',
-                    score=score,
-                    metadata=metadata
-                ))
+            # 应用过滤条件
+            if filters:
+                if 'category' in filters:
+                    wiki_query = wiki_query.filter(WikiPage.category == filters['category'])
+                if 'page_type' in filters:
+                    wiki_query = wiki_query.filter(WikiPage.page_type == filters['page_type'])
             
-            return results
-        except Exception as e:
-            logger.error(f"语义搜索失败: {e}")
-            return []
-    
-    def _full_text_search(self, query: str, filters: Dict[str, Any], top_k: int) -> List[SearchResult]:
+            wiki_pages = wiki_query.limit(top_k).all()
+
+            for page in wiki_pages:
+                # 计算关键词匹配得分
+                score = self._calculate_keyword_score(page, query)
+                results.append(
+                    {
+                        "type": "wiki_page",
+                        "id": page.id,
+                        "title": page.title,
+                        "content": (
+                            page.content[:200] + "..."
+                            if len(page.content) > 200
+                            else page.content
+                        ),
+                        "category": page.category,
+                        "score": score,
+                        "search_type": "keyword"
+                    }
+                )
+
+            # 搜索文档
+            documents = (
+                session.query(Document)
+                .filter(
+                    Document.title.contains(query)
+                    | Document.extracted_text.contains(query)
+                )
+                .limit(top_k)
+                .all()
+            )
+
+            for doc in documents:
+                # 计算关键词匹配得分
+                score = self._calculate_keyword_score(doc, query)
+                results.append(
+                    {
+                        "type": "document",
+                        "id": doc.id,
+                        "title": doc.title,
+                        "filename": doc.filename,
+                        "content": (
+                            doc.extracted_text[:200] + "..."
+                            if doc.extracted_text and len(doc.extracted_text) > 200
+                            else doc.extracted_text
+                        ),
+                        "score": score,
+                        "search_type": "keyword"
+                    }
+                )
+
+        return results
+
+    def _semantic_search(self, query: str, top_k: int = 20) -> List[Dict[str, Any]]:
         """
-        全文搜索：基于数据库LIKE查询
-        
+        语义搜索
+
         Args:
-            query: 搜索查询
-            filters: 过滤条件
-            top_k: 返回数量
-        
+            query: 搜索关键词
+            top_k: 返回结果数量
+
         Returns:
             搜索结果列表
         """
-        try:
-            with self.db.get_session() as session:
-                # 构建基础查询
-                wiki_pages = session.query(WikiPage)
-                
-                # 应用过滤条件
-                if filters:
-                    if 'category' in filters:
-                        wiki_pages = wiki_pages.filter(WikiPage.category == filters['category'])
-                    if 'page_type' in filters:
-                        wiki_pages = wiki_pages.filter(WikiPage.page_type == filters['page_type'])
-                
-                # 简单的全文搜索（SQLite LIKE查询）
-                search_terms = query.split()
-                for term in search_terms:
-                    wiki_pages = wiki_pages.filter(
-                        (WikiPage.title.ilike(f'%{term}%')) | 
-                        (WikiPage.content.ilike(f'%{term}%'))
-                    )
-                
-                pages = wiki_pages.limit(top_k).all()
-                
-                results = []
-                for page in pages:
-                    score = self._calculate_score(page, query)
-                    results.append(SearchResult(
-                        id=page.id,
-                        title=page.title,
-                        type='wiki_page',
-                        content=page.content[:200] + '...',
-                        score=score,
-                        metadata={
-                            'category': page.category,
-                            'page_type': page.page_type,
-                            'created_at': page.created_at.isoformat() if page.created_at else None,
-                            'updated_at': page.updated_at.isoformat() if page.updated_at else None,
-                            'view_count': page.view_count or 0
+        results = []
+
+        # 执行语义搜索
+        search_results = self.vector_store.search(query, top_k=top_k)
+
+        # 处理搜索结果
+        with self.db.get_session() as session:
+            for doc_id, score, metadata in search_results:
+                # 根据ID查找对应的文档或Wiki页面
+                # 先尝试查找WikiPage
+                wiki_page = session.query(WikiPage).filter(WikiPage.id == doc_id).first()
+                if wiki_page:
+                    results.append(
+                        {
+                            "type": "wiki_page",
+                            "id": wiki_page.id,
+                            "title": wiki_page.title,
+                            "content": (
+                                wiki_page.content[:200] + "..."
+                                if len(wiki_page.content) > 200
+                                else wiki_page.content
+                            ),
+                            "category": wiki_page.category,
+                            "score": score,
+                            "search_type": "semantic"
                         }
-                    ))
-                
-                return results
-        except Exception as e:
-            logger.error(f"全文搜索失败: {e}")
-            return []
-    
-    def _fuzzy_search(self, query: str, filters: Dict[str, Any], top_k: int) -> List[SearchResult]:
-        """
-        模糊搜索：支持拼音、首字母缩写匹配
-        
-        Args:
-            query: 搜索查询
-            filters: 过滤条件
-            top_k: 返回数量
-        
-        Returns:
-            搜索结果列表
-        """
-        try:
-            import pypinyin
-            
-            def get_pinyin(text):
-                """生成拼音和首字母"""
-                try:
-                    pinyin_list = pypinyin.lazy_pinyin(text, style=pypinyin.NORMAL)
-                    pinyin = ''.join(pinyin_list)
-                    first_letters = ''.join([p[0] for p in pinyin_list])
-                    return pinyin, first_letters
-                except Exception:
-                    return text, text[0] if text else ''
-            
-            query_pinyin, query_first_letters = get_pinyin(query)
-            
-            with self.db.get_session() as session:
-                wiki_pages = session.query(WikiPage)
-                
-                # 应用过滤条件
-                if filters:
-                    if 'category' in filters:
-                        wiki_pages = wiki_pages.filter(WikiPage.category == filters['category'])
-                
-                pages = wiki_pages.limit(100).all()
-                
-                results = []
-                for page in pages:
-                    page_pinyin, page_first_letters = get_pinyin(page.title)
-                    
-                    # 检查匹配：拼音包含、首字母包含、或分词匹配
-                    if (query_pinyin in page_pinyin or 
-                        query_first_letters in page_first_letters or
-                        any(q in page_pinyin for q in query.split())):
-                        score = 0.7 + (len(query) / len(page.title)) * 0.3
-                        results.append(SearchResult(
-                            id=page.id,
-                            title=page.title,
-                            type='wiki_page',
-                            content=page.content[:200] + '...',
-                            score=score,
-                            metadata={
-                                'category': page.category,
-                                'page_type': page.page_type
+                    )
+                else:
+                    # 再尝试查找Document
+                    document = session.query(Document).filter(Document.id == doc_id).first()
+                    if document:
+                        results.append(
+                            {
+                                "type": "document",
+                                "id": document.id,
+                                "title": document.title,
+                                "filename": document.filename,
+                                "content": (
+                                    document.extracted_text[:200] + "..."
+                                    if document.extracted_text and len(document.extracted_text) > 200
+                                    else document.extracted_text
+                                ),
+                                "score": score,
+                                "search_type": "semantic"
                             }
-                        ))
-                
-                return results[:top_k]
-                
-        except ImportError:
-            logger.warning("pypinyin未安装，跳过模糊搜索")
-            return []
-        except Exception as e:
-            logger.error(f"模糊搜索失败: {e}")
-            return []
-    
-    def _calculate_score(self, page: WikiPage, query: str) -> float:
+                        )
+
+        return results
+
+    def _hybrid_search(self, keyword_results: List[Dict[str, Any]], 
+                      semantic_results: List[Dict[str, Any]], 
+                      hybrid_weight: float = 0.5) -> List[Dict[str, Any]]:
         """
-        计算搜索匹配分数
-        
+        混合搜索
+
         Args:
-            page: Wiki页面对象
-            query: 搜索查询
-        
+            keyword_results: 关键词搜索结果
+            semantic_results: 语义搜索结果
+            hybrid_weight: 混合搜索权重
+
         Returns:
-            匹配分数 (0.0-1.0)
+            混合搜索结果
+        """
+        # 创建结果字典，用于去重和合并得分
+        result_dict = {}
+
+        # 添加关键词搜索结果
+        for result in keyword_results:
+            doc_id = result["id"]
+            if doc_id not in result_dict:
+                result_dict[doc_id] = result.copy()
+            else:
+                # 如果已经存在，更新得分
+                result_dict[doc_id]["score"] = (1 - hybrid_weight) * result["score"] + \
+                                              hybrid_weight * result_dict[doc_id].get("score", 0)
+
+        # 添加语义搜索结果
+        for result in semantic_results:
+            doc_id = result["id"]
+            if doc_id not in result_dict:
+                result_dict[doc_id] = result.copy()
+            else:
+                # 如果已经存在，更新得分
+                result_dict[doc_id]["score"] = (1 - hybrid_weight) * result_dict[doc_id].get("score", 0) + \
+                                              hybrid_weight * result["score"]
+
+        # 转换回列表
+        return list(result_dict.values())
+
+    def _calculate_keyword_score(self, item: Any, query: str) -> float:
+        """
+        计算关键词匹配得分
+
+        Args:
+            item: WikiPage或Document对象
+            query: 搜索关键词
+
+        Returns:
+            匹配得分
         """
         score = 0.0
-        query_lower = query.lower()
-        title_lower = page.title.lower()
-        content_lower = page.content.lower()
-        
-        # 标题完全匹配权重最高
-        if query_lower == title_lower:
+
+        # 检查标题匹配
+        if hasattr(item, "title") and item.title:
+            title_lower = item.title.lower()
+            query_lower = query.lower()
+            if query_lower in title_lower:
+                # 标题匹配权重更高
+                score += 0.7
+
+        # 检查内容匹配
+        content = ""
+        if hasattr(item, "content") and item.content:
+            content = item.content
+        elif hasattr(item, "extracted_text") and item.extracted_text:
+            content = item.extracted_text
+
+        if content:
+            content_lower = content.lower()
+            query_lower = query.lower()
+            if query_lower in content_lower:
+                # 内容匹配权重较低
+                score += 0.3
+
+        # 检查完全匹配
+        if hasattr(item, "title") and item.title == query:
             score = 1.0
-        elif query_lower in title_lower:
-            score += 0.5
-            # 标题开头匹配额外加分
-            if title_lower.startswith(query_lower):
-                score += 0.2
-        
-        # 内容匹配权重次之
-        if query_lower in content_lower:
-            score += 0.2
-        
-        # 分词匹配加分
-        for term in query.split():
-            term_lower = term.lower()
-            if term_lower in title_lower:
-                score += 0.05
-            if term_lower in content_lower:
-                score += 0.03
-        
-        return min(score, 1.0)
-    
-    def _deduplicate_results(self, results: List[SearchResult]) -> List[SearchResult]:
+        elif content == query:
+            score = 0.9
+
+        return score
+
+    def _enhance_results_with_entities(self, results: List[Dict[str, Any]], query_entities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        去重搜索结果
-        
-        Args:
-            results: 原始搜索结果列表
-        
-        Returns:
-            去重后的搜索结果列表
-        """
-        seen = set()
-        unique = []
-        
-        for result in results:
-            key = f"{result.type}_{result.id}"
-            if key not in seen:
-                seen.add(key)
-                unique.append(result)
-        
-        return unique
-    
-    def _sort_results(self, results: List[SearchResult], sort_by: str) -> List[SearchResult]:
-        """
-        排序搜索结果
-        
+        基于实体匹配增强搜索结果
+
         Args:
             results: 搜索结果列表
-            sort_by: 排序方式
+            query_entities: 查询中的实体列表
+
+        Returns:
+            增强后的搜索结果列表
+        """
+        enhanced_results = []
         
+        for result in results:
+            enhanced_result = result.copy()
+            
+            # 提取结果中的文本内容
+            text = ""
+            if "content" in result and result["content"]:
+                text = result["content"]
+            if "title" in result and result["title"]:
+                text += " " + result["title"]
+            
+            # 检查实体匹配
+            entity_match_count = 0
+            for entity in query_entities:
+                entity_name = entity.get("name", "")
+                if entity_name and entity_name in text:
+                    entity_match_count += 1
+            
+            # 根据实体匹配程度调整得分
+            if entity_match_count > 0:
+                # 每个匹配的实体增加0.1的得分
+                entity_score = entity_match_count * 0.1
+                enhanced_result["score"] = enhanced_result.get("score", 0) + entity_score
+                enhanced_result["entity_matches"] = entity_match_count
+            
+            enhanced_results.append(enhanced_result)
+        
+        return enhanced_results
+
+    def search_by_category(self, category: str) -> List[Dict[str, Any]]:
+        """
+        按分类搜索
+
+        Args:
+            category: 分类名称
+
+        Returns:
+            搜索结果列表
+        """
+        results = []
+
+        with self.db.get_session() as session:
+            pages = session.query(WikiPage).filter(WikiPage.category == category).all()
+
+            for page in pages:
+                results.append(
+                    {
+                        "id": page.id,
+                        "title": page.title,
+                        "category": page.category,
+                        "content": (
+                            page.content[:100] + "..."
+                            if len(page.content) > 100
+                            else page.content
+                        ),
+                    }
+                )
+
+        return results
+
+    def _apply_filters(self, results: List[Dict[str, Any]], filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        应用过滤条件
+
+        Args:
+            results: 搜索结果列表
+            filters: 过滤条件
+
+        Returns:
+            过滤后的搜索结果列表
+        """
+        filtered_results = []
+        
+        for result in results:
+            # 检查分类过滤
+            if 'category' in filters and 'category' in result:
+                if result['category'] != filters['category']:
+                    continue
+            
+            # 检查页面类型过滤
+            if 'page_type' in filters and 'page_type' in result:
+                if result['page_type'] != filters['page_type']:
+                    continue
+            
+            # 检查类型过滤
+            if 'type' in filters:
+                if result.get('type') != filters['type']:
+                    continue
+            
+            filtered_results.append(result)
+        
+        return filtered_results
+
+    def _sort_results(self, results: List[Dict[str, Any]], sort_by: str) -> List[Dict[str, Any]]:
+        """
+        对搜索结果进行排序
+
+        Args:
+            results: 搜索结果列表
+            sort_by: 排序方式 (relevance, time, popularity)
+
         Returns:
             排序后的搜索结果列表
         """
         if sort_by == "relevance":
-            return sorted(results, key=lambda x: x.score, reverse=True)
+            # 按相关性排序
+            results.sort(key=lambda x: x.get("score", 0), reverse=True)
         elif sort_by == "time":
-            return sorted(results, key=lambda x: x.metadata.get('updated_at', ''), reverse=True)
+            # 按时间排序（假设结果中有时间字段）
+            results.sort(key=lambda x: x.get("modified", ""), reverse=True)
         elif sort_by == "popularity":
-            return sorted(results, key=lambda x: x.metadata.get('view_count', 0), reverse=True)
-        else:
-            return sorted(results, key=lambda x: x.score, reverse=True)
-    
-    def get_facets(self, query: str) -> Dict[str, List[Dict[str, Any]]]:
+            # 按热度排序（假设结果中有热度字段）
+            results.sort(key=lambda x: x.get("popularity", 0), reverse=True)
+        
+        return results
+
+    def search_related_topics(self, topic: str) -> List[Dict[str, Any]]:
         """
-        获取搜索面（用于过滤统计）
-        
+        搜索相关主题
+
         Args:
-            query: 搜索查询
-        
+            topic: 主题名称
+
         Returns:
-            搜索面统计信息，包含分类和页面类型
+            相关主题列表
         """
         try:
-            with self.db.get_session() as session:
-                # 获取分类统计
-                categories = session.query(WikiPage.category).distinct().all()
-                category_facet = [
-                    {"value": cat[0], "count": session.query(WikiPage).filter(
-                        WikiPage.category == cat[0]
-                    ).count()}
-                    for cat in categories if cat[0]
-                ]
+            logger.info(f"搜索相关主题: {topic}")
+            
+            # 初始化结果列表
+            related_topics = []
+            
+            # 使用语义搜索找到相关内容
+            if self.vector_store:
+                # 执行语义搜索
+                search_results = self.vector_store.search(topic, top_k=10)
                 
-                # 获取页面类型统计
-                page_types = session.query(WikiPage.page_type).distinct().all()
-                type_facet = [
-                    {"value": pt[0], "count": session.query(WikiPage).filter(
-                        WikiPage.page_type == pt[0]
-                    ).count()}
-                    for pt in page_types if pt[0]
-                ]
-                
-                return {
-                    "categories": category_facet,
-                    "page_types": type_facet
-                }
+                # 处理搜索结果
+                with self.db.get_session() as session:
+                    for doc_id, score, metadata in search_results:
+                        # 根据ID查找对应的文档或Wiki页面
+                        # 先尝试查找WikiPage
+                        wiki_page = session.query(WikiPage).filter(WikiPage.id == doc_id).first()
+                        if wiki_page:
+                            related_topics.append({
+                                "id": wiki_page.id,
+                                "title": wiki_page.title,
+                                "category": wiki_page.category,
+                                "score": score,
+                                "type": "wiki_page"
+                            })
+                        else:
+                            # 再尝试查找Document
+                            document = session.query(Document).filter(Document.id == doc_id).first()
+                            if document:
+                                related_topics.append({
+                                    "id": document.id,
+                                    "title": document.title,
+                                    "filename": document.filename,
+                                    "score": score,
+                                    "type": "document"
+                                })
+            
+            # 也可以使用关键词搜索来补充结果
+            keyword_results = self._keyword_search(topic, top_k=10)
+            for result in keyword_results:
+                # 去重：检查是否已经在结果列表中
+                if not any(item.get("id") == result.get("id") for item in related_topics):
+                    related_topics.append({
+                        "id": result.get("id"),
+                        "title": result.get("title"),
+                        "category": result.get("category"),
+                        "filename": result.get("filename"),
+                        "score": result.get("score"),
+                        "type": result.get("type")
+                    })
+            
+            # 按得分排序
+            related_topics.sort(key=lambda x: x.get("score", 0), reverse=True)
+            
+            # 限制返回结果数量
+            related_topics = related_topics[:10]
+            
+            logger.info(f"找到 {len(related_topics)} 个相关主题")
+            return related_topics
         except Exception as e:
-            logger.error(f"获取搜索面失败: {e}")
-            return {"categories": [], "page_types": []}
-    
-    def index_document(self, document_id: str, content: str, metadata: Dict[str, Any]):
-        """
-        将文档索引到向量存储
-        
-        Args:
-            document_id: 文档ID
-            content: 文档内容
-            metadata: 文档元数据
-        
-        Returns:
-            是否成功索引
-        """
-        try:
-            self.vector_store.add(
-                documents=[content],
-                ids=[document_id],
-                metadatas=[metadata]
-            )
-            return True
-        except Exception as e:
-            logger.error(f"索引文档失败: {e}")
-            return False
-    
-    def remove_from_index(self, document_id: str):
-        """
-        从索引中移除文档
-        
-        Args:
-            document_id: 文档ID
-        
-        Returns:
-            是否成功移除
-        """
-        try:
-            self.vector_store.delete([document_id])
-            return True
-        except Exception as e:
-            logger.error(f"从索引移除文档失败: {
+            logger.error(f"搜索相关主题失败: {e}")
+            return []
