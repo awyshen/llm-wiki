@@ -1,7 +1,8 @@
 // 全局变量
 let currentSection = 'import';
 let importedDocuments = []; // 存储导入的文档
-const API_BASE_URL = 'http://127.0.0.1:5050/api'; // 后端API基础URL
+const API_BASE_URL = 'http://10.35.168.40:5050/api'; // 后端API基础URL
+let healthStatus = null; // 存储健康状态
 
 // 页面加载完成后执行
 document.addEventListener('DOMContentLoaded', function() {
@@ -47,9 +48,14 @@ function initNavigation() {
             // 更新当前 section
             currentSection = targetId;
             
-            // 如果切换到知识图谱页面，重新初始化图谱
-            if (targetId === 'graph') {
-                initGraphVisualization();
+            // 初始化对应部分的功能
+            switch(targetId) {
+                case 'graph':
+                    initGraphVisualization();
+                    break;
+                case 'dialog':
+                    initDialogSection();
+                    break;
             }
         });
     });
@@ -392,18 +398,23 @@ function initButtons() {
                 if (response.ok) {
                     const results = await response.json();
                     
-                    // 生成表格HTML
-                    let tableHTML = '<table><thead><tr><th>标题</th><th>类型</th><th>内容</th><th>相关性</th></tr></thead><tbody><tbody>';
+                    // 存储搜索结果到全局变量，以便后续使用
+                    window.searchResults = results;
+                    window.currentSearchQuery = searchInput.value;
                     
-                    if (results.length === 0) {
-                        tableHTML += '<tr><td colspan="4" style="text-align: center; color: #64748b;">没有找到匹配的结果</td></tr>';
+                    // 生成表格HTML
+                    let tableHTML = '<table><thead><tr><th>标题</th><th>类型</th><th>内容</th><th>相关性</th><th>操作</th></tr></thead><tbody><tbody><tbody>';
+                    
+                    if (!results || results.length === 0) {
+                        tableHTML += '<tr><td colspan="5" style="text-align: center; color: #64748b;">没有找到匹配的结果</td></tr>';
                     } else {
-                        results.forEach(result => {
+                        results.forEach((result, index) => {
                             tableHTML += `<tr>
                                 <td>${result.title || '未知'}</td>
                                 <td>${result.type || '页面'}</td>
                                 <td>${result.content || '无内容'}</td>
-                                <td>${result.relevance || 0.0}</td>
+                                <td>${result.relevance || result.score || 0.0}</td>
+                                <td><button onclick="saveSearchResultByIndex(${index})" class="btn btn-secondary">保存为Wiki页面</button></td>
                             </tr>`;
                         });
                     }
@@ -1280,5 +1291,434 @@ async function filterByType() {
         
         // 绘制筛选后的图谱
         drawGraph({ nodes: filteredNodes, links: filteredLinks });
+    }
+}
+
+// 按索引保存搜索结果为Wiki页面
+async function saveSearchResultByIndex(index) {
+    // 从全局变量中获取搜索结果和查询
+    const results = window.searchResults;
+    const query = window.currentSearchQuery;
+    
+    if (!results || !results[index]) {
+        console.error('搜索结果不存在');
+        return;
+    }
+    
+    const result = results[index];
+    await saveSearchResultAsWikiPage(query, result);
+}
+
+// 保存搜索结果为Wiki页面
+async function saveSearchResultAsWikiPage(query, result) {
+    try {
+        // 显示加载状态
+        const searchResults = document.getElementById('search-results');
+        const originalContent = searchResults.innerHTML;
+        searchResults.innerHTML = '<div style="text-align: center; padding: 20px;">保存中...</div>';
+        
+        // 调用后端API保存为Wiki页面
+        const response = await fetch(`${API_BASE_URL}/wiki/save-answer`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                query: query,
+                answer: result.content,
+                related_results: [result]
+            })
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            searchResults.innerHTML = '<div style="text-align: center; color: #10b981;">已保存为Wiki页面: ' + data.title + '</div>';
+            
+            // 3秒后恢复原始内容
+            setTimeout(() => {
+                searchResults.innerHTML = originalContent;
+            }, 3000);
+        } else {
+            searchResults.innerHTML = '<div style="text-align: center; color: #ef4444;">保存失败</div>';
+            
+            // 3秒后恢复原始内容
+            setTimeout(() => {
+                searchResults.innerHTML = originalContent;
+            }, 3000);
+        }
+    } catch (error) {
+        console.error('保存搜索结果失败:', error);
+        const searchResults = document.getElementById('search-results');
+        searchResults.innerHTML = '<div style="text-align: center; color: #ef4444;">保存失败: ' + error.message + '</div>';
+    }
+}
+
+// 初始化健康检查功能
+function initHealthCheck() {
+    // 系统状态页面加载时执行
+    const statusSection = document.getElementById('status');
+    if (statusSection) {
+        // 添加健康检查按钮
+        const card = statusSection.querySelector('.card');
+        if (card) {
+            const healthCheckBtn = document.createElement('button');
+            healthCheckBtn.id = 'health-check-btn';
+            healthCheckBtn.className = 'btn btn-primary';
+            healthCheckBtn.textContent = '运行健康检查';
+            healthCheckBtn.style.marginBottom = '20px';
+            card.insertBefore(healthCheckBtn, card.firstChild);
+            
+            // 添加健康检查结果容器
+            const healthResult = document.createElement('div');
+            healthResult.id = 'health-result';
+            healthResult.className = 'result';
+            card.appendChild(healthResult);
+            
+            // 添加健康检查按钮事件监听器
+            healthCheckBtn.addEventListener('click', async function() {
+                await runHealthCheck();
+            });
+        }
+    }
+}
+
+// 运行健康检查
+async function runHealthCheck() {
+    try {
+        const healthResult = document.getElementById('health-result');
+        if (healthResult) {
+            // 显示加载状态
+            healthResult.textContent = '运行健康检查中...';
+            
+            // 调用后端API进行健康检查
+            const response = await fetch(`${API_BASE_URL}/health`);
+            
+            if (response.ok) {
+                const data = await response.json();
+                healthStatus = data;
+                
+                // 生成健康检查结果HTML
+                let healthHTML = `
+                    <h3>健康检查结果</h3>
+                    <div class="health-details">
+                        <div class="health-card">
+                            <h4>Wiki 状态</h4>
+                            <p>页面数量: ${data.wiki.total_pages || 0}</p>
+                            <p>有效页面: ${data.wiki.valid_pages || 0}</p>
+                            <p>无效页面: ${data.wiki.invalid_pages || 0}</p>
+                        </div>
+                        <div class="health-card">
+                            <h4>数据库状态</h4>
+                            <p>连接状态: ${data.database.status || '未知'}</p>
+                            <p>文档数量: ${data.database.document_count || 0}</p>
+                            <p>Wiki页面数量: ${data.database.wiki_page_count || 0}</p>
+                            <p>错误: ${data.database.errors ? data.database.errors.length : 0}</p>
+                        </div>
+                        <div class="health-card">
+                            <h4>知识图谱状态</h4>
+                            <p>实体数量: ${data.knowledge_graph.entity_count || 0}</p>
+                            <p>关系数量: ${data.knowledge_graph.relation_count || 0}</p>
+                            <p>状态: ${data.knowledge_graph.status || '未知'}</p>
+                        </div>
+                        <div class="health-card">
+                            <h4>系统状态</h4>
+                            <p>总体状态: ${data.overall_status || '未知'}</p>
+                            <p>检查时间: ${new Date().toLocaleString()}</p>
+                            ${data.wiki.suggestions && data.wiki.suggestions.length > 0 ? `
+                                <div class="recommendations">
+                                    <h5>建议:</h5>
+                                    <ul>
+                                        ${data.wiki.suggestions.map(rec => `<li>${rec}</li>`).join('')}
+                                    </ul>
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                `;
+                
+                healthResult.innerHTML = healthHTML;
+                healthResult.style.color = '#10b981';
+            } else {
+                healthResult.textContent = '健康检查失败';
+                healthResult.style.color = '#ef4444';
+            }
+        }
+    } catch (error) {
+        console.error('健康检查失败:', error);
+        const healthResult = document.getElementById('health-result');
+        if (healthResult) {
+            healthResult.textContent = '健康检查失败: ' + error.message;
+            healthResult.style.color = '#ef4444';
+        }
+    }
+}
+
+// 页面加载完成后初始化健康检查功能
+document.addEventListener('DOMContentLoaded', function() {
+    initHealthCheck();
+});
+
+// 初始化对话系统
+function initDialogSection() {
+    // 初始化创建会话按钮
+    const createSessionBtn = document.getElementById('create-session-btn');
+    if (createSessionBtn) {
+        createSessionBtn.addEventListener('click', async function() {
+            const documentId = document.getElementById('document-id').value.trim();
+            const wikiPageId = document.getElementById('wiki-page-id').value.trim();
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/dialog/sessions`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        document_id: documentId || null,
+                        wiki_page_id: wikiPageId || null
+                    })
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    if (result.success) {
+                        document.getElementById('session-id').value = result.session_id;
+                        alert(`会话创建成功！会话ID: ${result.session_id}`);
+                        loadSessionList();
+                    } else {
+                        alert(`创建会话失败: ${result.error}`);
+                    }
+                } else {
+                    alert('创建会话失败');
+                }
+            } catch (error) {
+                console.error('创建会话失败:', error);
+                alert('创建会话失败');
+            }
+        });
+    }
+    
+    // 初始化发送消息按钮
+    const sendMessageBtn = document.getElementById('send-message-btn');
+    if (sendMessageBtn) {
+        sendMessageBtn.addEventListener('click', async function() {
+            const sessionId = document.getElementById('session-id').value.trim();
+            const message = document.getElementById('message-input').value.trim();
+            
+            if (!sessionId) {
+                alert('请输入会话ID');
+                return;
+            }
+            
+            if (!message) {
+                alert('请输入消息内容');
+                return;
+            }
+            
+            try {
+                // 添加用户消息到对话历史
+                addMessageToHistory('user', message);
+                
+                // 清空消息输入框
+                document.getElementById('message-input').value = '';
+                
+                const response = await fetch(`${API_BASE_URL}/dialog/sessions/${sessionId}/messages`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message: message
+                    })
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    if (result.success) {
+                        // 添加助手消息到对话历史
+                        addMessageToHistory('assistant', result.answer);
+                        
+                        // 显示重要信息
+                        if (result.important_info && result.important_info.length > 0) {
+                            alert('提取到重要信息，已自动更新相关文档');
+                        }
+                    } else {
+                        alert(`发送消息失败: ${result.error}`);
+                    }
+                } else {
+                    alert('发送消息失败');
+                }
+            } catch (error) {
+                console.error('发送消息失败:', error);
+                alert('发送消息失败');
+            }
+        });
+    }
+    
+    // 初始化获取会话按钮
+    const getSessionBtn = document.getElementById('get-session-btn');
+    if (getSessionBtn) {
+        getSessionBtn.addEventListener('click', async function() {
+            const sessionId = document.getElementById('session-id').value.trim();
+            
+            if (!sessionId) {
+                alert('请输入会话ID');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/dialog/sessions/${sessionId}`);
+                
+                if (response.ok) {
+                    const sessionInfo = await response.json();
+                    
+                    // 清空对话历史
+                    document.getElementById('dialog-history').innerHTML = '';
+                    
+                    // 添加历史消息到对话历史
+                    if (sessionInfo.messages) {
+                        sessionInfo.messages.forEach(msg => {
+                            addMessageToHistory(msg.role, msg.content);
+                        });
+                    }
+                    
+                    alert('会话信息加载成功');
+                } else {
+                    alert('获取会话信息失败');
+                }
+            } catch (error) {
+                console.error('获取会话信息失败:', error);
+                alert('获取会话信息失败');
+            }
+        });
+    }
+    
+    // 初始化删除会话按钮
+    const deleteSessionBtn = document.getElementById('delete-session-btn');
+    if (deleteSessionBtn) {
+        deleteSessionBtn.addEventListener('click', async function() {
+            const sessionId = document.getElementById('session-id').value.trim();
+            
+            if (!sessionId) {
+                alert('请输入会话ID');
+                return;
+            }
+            
+            if (!confirm(`确定要删除会话 ${sessionId} 吗？`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/dialog/sessions/${sessionId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    if (result.success) {
+                        // 清空对话历史
+                        document.getElementById('dialog-history').innerHTML = '';
+                        // 清空会话ID
+                        document.getElementById('session-id').value = '';
+                        // 重新加载会话列表
+                        loadSessionList();
+                        alert('会话删除成功');
+                    } else {
+                        alert(`删除会话失败: ${result.error}`);
+                    }
+                } else {
+                    alert('删除会话失败');
+                }
+            } catch (error) {
+                console.error('删除会话失败:', error);
+                alert('删除会话失败');
+            }
+        });
+    }
+    
+    // 加载会话列表
+    loadSessionList();
+}
+
+// 加载会话列表
+async function loadSessionList() {
+    try {
+        const response = await fetch(`${API_BASE_URL}/dialog/sessions`);
+        
+        if (response.ok) {
+            const sessions = await response.json();
+            const sessionList = document.getElementById('session-list');
+            
+            if (sessionList) {
+                if (sessions.length === 0) {
+                    sessionList.innerHTML = '<p>暂无会话</p>';
+                } else {
+                    let html = '<table><thead><tr><th>会话ID</th><th>文档ID</th><th>Wiki页面ID</th><th>创建时间</th><th>操作</th></tr></thead><tbody>';
+                    
+                    sessions.forEach(session => {
+                        const startTime = new Date(session.start_time * 1000).toLocaleString();
+                        html += `<tr>\n                            <td>${session.session_id}</td>\n                            <td>${session.document_id || '-'}</td>\n                            <td>${session.wiki_page_id || '-'}</td>\n                            <td>${startTime}</td>\n                            <td>\n                                <button onclick="selectSession('${session.session_id}')" class="btn btn-sm btn-primary">选择</button>\n                                <button onclick="deleteSession('${session.session_id}')" class="btn btn-sm btn-danger">删除</button>\n                            </td>\n                        </tr>`;
+                    });
+                    
+                    html += '</tbody></table>';
+                    sessionList.innerHTML = html;
+                }
+            }
+        }
+    } catch (error) {
+        console.error('加载会话列表失败:', error);
+    }
+}
+
+// 选择会话
+function selectSession(sessionId) {
+    document.getElementById('session-id').value = sessionId;
+}
+
+// 删除会话
+async function deleteSession(sessionId) {
+    if (!confirm(`确定要删除会话 ${sessionId} 吗？`)) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE_URL}/dialog/sessions/${sessionId}`, {
+            method: 'DELETE'
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            if (result.success) {
+                // 重新加载会话列表
+                loadSessionList();
+                alert('会话删除成功');
+            } else {
+                alert(`删除会话失败: ${result.error}`);
+            }
+        } else {
+            alert('删除会话失败');
+        }
+    } catch (error) {
+        console.error('删除会话失败:', error);
+        alert('删除会话失败');
+    }
+}
+
+// 添加消息到对话历史
+function addMessageToHistory(role, content) {
+    const dialogHistory = document.getElementById('dialog-history');
+    if (dialogHistory) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `message ${role}`;
+        messageDiv.innerHTML = `
+            <div class="message-header">
+                <span class="role">${role === 'user' ? '用户' : '助手'}</span>
+                <span class="time">${new Date().toLocaleString()}</span>
+            </div>
+            <div class="message-content">${content}</div>
+        `;
+        dialogHistory.appendChild(messageDiv);
+        // 滚动到底部
+        dialogHistory.scrollTop = dialogHistory.scrollHeight;
     }
 }

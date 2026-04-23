@@ -169,10 +169,12 @@ class ChromaVectorStore(VectorStoreBase):
             query_embedding = self.embedding_service.generate_embedding(query)
 
             # 执行搜索（使用chromadb 1.5.7 API）
+            # 处理空过滤条件
+            where_filter = filter if filter and len(filter) > 0 else None
             results = self.collection.query(
                 query_embeddings=[query_embedding], 
                 n_results=top_k, 
-                where=filter
+                where=where_filter
             )
 
             # 处理结果
@@ -183,6 +185,9 @@ class ChromaVectorStore(VectorStoreBase):
                 metadata = (
                     results["metadatas"][0][i] if results["metadatas"][0][i] else {}
                 )
+                # 添加文档内容到metadata
+                if "documents" in results and results["documents"] and results["documents"][0] and len(results["documents"][0]) > i:
+                    metadata["content"] = results["documents"][0][i]
                 search_results.append((doc_id, score, metadata))
 
             # 更新搜索缓存
@@ -247,8 +252,10 @@ class ChromaVectorStore(VectorStoreBase):
             else:
                 try:
                     # 执行搜索
+                    # 处理空过滤条件
+                    where_filter = filter if filter and len(filter) > 0 else None
                     search_result = self.collection.query(
-                        query_embeddings=[query_embeddings[i]], n_results=top_k, where=filter
+                        query_embeddings=[query_embeddings[i]], n_results=top_k, where=where_filter
                     )
                     
                     # 处理结果
@@ -259,6 +266,9 @@ class ChromaVectorStore(VectorStoreBase):
                         metadata = (
                             search_result["metadatas"][0][j] if search_result["metadatas"][0][j] else {}
                         )
+                        # 添加文档内容到metadata
+                        if "documents" in search_result and search_result["documents"] and search_result["documents"][0] and len(search_result["documents"][0]) > j:
+                            metadata["content"] = search_result["documents"][0][j]
                         search_results.append((doc_id, score, metadata))
                     
                     # 更新搜索缓存

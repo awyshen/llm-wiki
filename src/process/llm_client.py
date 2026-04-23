@@ -619,6 +619,90 @@ class LLMClient:
                 "related_topics": ["相关主题1", "相关主题2"],
             }
 
+    def generate_title_from_query(self, query: str) -> Optional[str]:
+        """
+        从查询生成页面标题
+
+        Args:
+            query: 查询内容
+
+        Returns:
+            生成的页面标题
+        """
+        try:
+            logger.info(f"从查询生成标题: {query}")
+            
+            # 生成缓存键
+            cache_key = f"title:{query[:500]}"
+            
+            # 检查缓存
+            cached_result = self._get_from_cache(cache_key)
+            if cached_result and "title" in cached_result:
+                return cached_result["title"]
+            
+            # 构建提示词
+            prompt = f"请为以下查询生成一个简洁、准确的页面标题，不超过30个字符：\n{query}"
+            
+            # 调用LLM
+            provider = self.default_provider
+            if provider == "openai":
+                result = self._call_openai_api("生成标题", prompt, system_prompt="你是一个标题生成专家，擅长为查询生成简洁准确的页面标题。", task_type="title_generation")
+            elif provider == "anthropic":
+                result = self._call_anthropic_api("生成标题", prompt, task_type="title_generation")
+            else:
+                # 模拟结果
+                result = {"title": query[:30] + "..." if len(query) > 30 else query}
+            
+            # 缓存结果
+            self._add_to_cache(cache_key, result)
+            
+            return result.get("title")
+        except Exception as e:
+            logger.error(f"生成标题失败: {e}")
+            return None
+
+    def generate_summary(self, text: str) -> Optional[str]:
+        """
+        从文本生成摘要
+
+        Args:
+            text: 文本内容
+
+        Returns:
+            生成的摘要
+        """
+        try:
+            logger.info(f"生成摘要，文本长度: {len(text)}")
+            
+            # 生成缓存键
+            cache_key = f"summary:{text[:500]}"
+            
+            # 检查缓存
+            cached_result = self._get_from_cache(cache_key)
+            if cached_result and "summary" in cached_result:
+                return cached_result["summary"]
+            
+            # 构建提示词
+            prompt = f"请为以下文本生成一个简洁的摘要，不超过150字：\n{text[:2000]}"
+            
+            # 调用LLM
+            provider = self.default_provider
+            if provider == "openai":
+                result = self._call_openai_api("生成摘要", prompt, system_prompt="你是一个摘要生成专家，擅长为文本生成简洁准确的摘要。", task_type="summary_generation")
+            elif provider == "anthropic":
+                result = self._call_anthropic_api("生成摘要", prompt, task_type="summary_generation")
+            else:
+                # 模拟结果
+                result = {"summary": text[:150] + "..." if len(text) > 150 else text}
+            
+            # 缓存结果
+            self._add_to_cache(cache_key, result)
+            
+            return result.get("summary")
+        except Exception as e:
+            logger.error(f"生成摘要失败: {e}")
+            return None
+
 
 # 全局LLM客户端实例
 llm_client = LLMClient()

@@ -18,6 +18,7 @@ from ..core.performance_monitor import monitor_performance, performance_monitor
 from ..storage.database import get_db_manager
 from ..storage.models import Document, WikiPage, Entity, Tag, ProcessingStatus
 from ..storage.wiki_storage import WikiStorage, WikiPageData
+from ..storage.vector.factory import get_vector_store
 from .llm_client import LLMClient, get_llm_client
 from .knowledge_graph_builder import get_knowledge_graph_builder
 
@@ -34,6 +35,7 @@ class KnowledgeProcessor:
         self.llm = llm_client or get_llm_client()
         self.db = get_db_manager()
         self.wiki_storage = WikiStorage(config)
+        self.vector_store = get_vector_store()
         self.knowledge_graph_builder = get_knowledge_graph_builder()
         self.max_workers = min(
             10, self.config.performance.get("max_concurrent_requests", 10)
@@ -153,12 +155,39 @@ class KnowledgeProcessor:
             # 保存Wiki页面
             file_path = self.wiki_storage.save_page(page_data, page_type="article")
 
+            # 更新索引
+            self.wiki_storage.update_index()
+
+            # 添加操作日志
+            log_details = f"处理文档: {title}\n文件路径: {file_path}\n分类: {page_data.category}\n标签: {', '.join(page_data.tags)}"
+            self.wiki_storage.add_to_log("文档处理", log_details)
+
             # 更新数据库
             wiki_page_id = self._update_database(document_id, page_data, file_path)
 
             # 构建知识图谱
             if wiki_page_id:
                 self._build_knowledge_graph(document_id, wiki_page_id, content, page_data.content)
+
+            # 将文档内容添加到向量存储
+            try:
+                # 准备文档内容和元数据
+                documents = [content]
+                ids = [document_id]
+                metadatas = [{
+                    "document_id": document_id,
+                    "wiki_page_id": wiki_page_id,
+                    "title": title,
+                    "category": page_data.category,
+                    "tags": page_data.tags,
+                    "content": content
+                }]
+                
+                # 添加到向量存储
+                self.vector_store.add(documents=documents, ids=ids, metadatas=metadatas)
+                logger.info(f"文档内容已添加到向量存储: {title}")
+            except Exception as e:
+                logger.error(f"将文档内容添加到向量存储失败: {e}")
 
             logger.info(f"文档处理成功: {title}")
             return True
@@ -418,3 +447,98 @@ class KnowledgeProcessor:
             "completed": completed,
             "failed": failed
         }
+
+    def run_health_check(self) -> Dict[str, Any]:
+        """
+        运行Wiki健康检查（Lint）
+
+        Returns:
+            健康检查结果
+        """
+        logger.info("开始运行Wiki健康检查...")
+        
+        # 检查Wiki健康状态
+        wiki_health = self.wiki_storage.check_wiki_health()
+        
+        # 检查数据库状态
+        db_status = self._check_database_health()
+        
+        # 检查知识图谱状态
+        graph_status = self._check_graph_health()
+        
+        # 综合健康检查结果
+        health_result = {
+            "wiki": wiki_health,
+            "database": db_status,
+            "knowledge_graph": graph_status,
+            "overall_status": "healthy" if not wiki_health["errors"] and not db_status["errors"] else "unhealthy"
+        }
+        
+        # 添加健康检查日志
+        log_details = f"健康检查结果:\n"
+        log_details += f"Wiki状态: {health_result['wiki']}\n"
+        log_details += f"数据库状态: {health_result['database']}\n"
+        log_details += f"知识图谱状态: {health_result['knowledge_graph']}\n"
+        log_details += f"整体状态: {health_result['overall_status']}"
+        self.wiki_storage.add_to_log("健康检查", log_details)
+        
+        logger.info(f"健康检查完成: {health_result}")
+        return health_result
+
+    def _check_database_health(self) -> Dict[str, Any]:
+        """
+        检查数据库健康状态
+
+        Returns:
+            数据库健康状态
+        """
+        from sqlalchemy import text
+        
+        db_status = {
+            "status": "healthy",
+            "errors": [],
+            "document_count": 0,
+            "wiki_page_count": 0
+        }
+        
+        try:
+            with self.db.get_session() as session:
+                # 检查数据库连接
+                session.execute(text("SELECT 1"))
+                
+                # 统计文档数量
+                db_status["document_count"] = session.query(Document).count()
+                db_status["wiki_page_count"] = session.query(WikiPage).count()
+                
+        except Exception as e:
+            db_status["status"] = "unhealthy"
+            db_status["errors"].append(f"数据库连接失败: {str(e)}")
+        
+        return db_status
+
+    def _check_graph_health(self) -> Dict[str, Any]:
+        """
+        检查知识图谱健康状态
+
+        Returns:
+            知识图谱健康状态
+        """
+        graph_status = {
+            "status": "healthy",
+            "errors": [],
+            "entity_count": 0,
+            "relation_count": 0
+        }
+        
+        try:
+            with self.db.get_session() as session:
+                # 统计实体和关系数量
+                graph_status["entity_count"] = session.query(Entity).count()
+                # 注意：这里假设关系也存储在数据库中，需要根据实际模型调整
+                # graph_status["relation_count"] = session.query(Relation).count()
+                
+        except Exception as e:
+            graph_status["status"] = "unhealthy"
+            graph_status["errors"].append(f"知识图谱检查失败: {str(e)}")
+        
+        return graph_status

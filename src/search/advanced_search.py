@@ -5,6 +5,7 @@
 """
 
 from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime
 from ..core.config import get_config
 from ..core.logger import get_logger
 from ..storage.database import get_db_manager
@@ -504,3 +505,121 @@ class AdvancedSearch:
         except Exception as e:
             logger.error(f"搜索相关主题失败: {e}")
             return []
+
+    def save_query_answer_as_wiki_page(self, query: str, answer: str, related_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        将有价值的查询回答保存为Wiki新页面
+
+        Args:
+            query: 查询内容
+            answer: 回答内容
+            related_results: 相关搜索结果
+
+        Returns:
+            保存结果
+        """
+        from ..storage.wiki_storage import WikiStorage, WikiPageData
+        from ..process.llm_client import get_llm_client
+        
+        try:
+            logger.info(f"将查询回答保存为Wiki页面: {query}")
+            
+            # 初始化Wiki存储和LLM客户端
+            wiki_storage = WikiStorage()
+            llm_client = get_llm_client()
+            
+            # 生成页面标题
+            title = self._generate_title_from_query(query)
+            if not title:
+                title = query[:50] + "..." if len(query) > 50 else query
+            
+            # 生成页面摘要
+            summary = self._generate_summary(answer)
+            if not summary:
+                summary = answer[:100] + "..." if len(answer) > 100 else answer
+            
+            # 生成页面内容
+            content = f"# 原始查询\n{query}\n\n# 回答\n{answer}\n\n"
+            
+            # 添加相关参考
+            if related_results:
+                content += "# 相关参考\n"
+                for i, result in enumerate(related_results[:5], 1):
+                    content += f"- [{result.get('title', '未知')}]({result.get('id', '')})\n"
+            
+            # 创建Wiki页面数据
+            page_data = WikiPageData(
+                title=title,
+                content=content,
+                summary=summary,
+                category="查询回答",
+                tags=["查询", "自动生成"],
+                metadata={
+                    "query": query,
+                    "related_results": related_results,
+                    "created_at": datetime.now().isoformat()
+                }
+            )
+            
+            # 保存Wiki页面
+            file_path = wiki_storage.save_page(page_data, page_type="article")
+            
+            # 更新索引
+            wiki_storage.update_index()
+            
+            # 添加操作日志
+            log_details = f"保存查询回答为Wiki页面: {title}\n查询内容: {query}\n文件路径: {file_path}"
+            wiki_storage.add_to_log("查询回答保存", log_details)
+            
+            logger.info(f"成功将查询回答保存为Wiki页面: {file_path}")
+            return {
+                "success": True,
+                "file_path": file_path,
+                "title": title
+            }
+        except Exception as e:
+            logger.error(f"保存查询回答为Wiki页面失败: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    def _generate_title_from_query(self, query: str) -> str:
+        """
+        从查询生成页面标题
+
+        Args:
+            query: 查询内容
+
+        Returns:
+            页面标题
+        """
+        try:
+            # 简单实现：使用查询的前50个字符作为标题
+            title = query.strip()
+            if len(title) > 50:
+                title = title[:50] + "..."
+            return title
+        except Exception as e:
+            logger.error(f"生成标题失败: {e}")
+            return ""
+    
+    def _generate_summary(self, answer: str) -> str:
+        """
+        从回答生成页面摘要
+
+        Args:
+            answer: 回答内容
+
+        Returns:
+            页面摘要
+        """
+        try:
+            # 简单实现：使用回答的前100个字符作为摘要
+            summary = answer.strip()
+            if len(summary) > 100:
+                summary = summary[:100] + "..."
+            return summary
+        except Exception as e:
+            logger.error(f"生成摘要失败: {e}")
+            return ""

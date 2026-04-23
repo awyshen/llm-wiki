@@ -128,6 +128,12 @@ def start_api():
     """
     logger.info("正在启动API服务...")
 
+    # 启动定期健康检查
+    from src.storage.wiki_storage import WikiStorage
+    wiki_storage = WikiStorage()
+    wiki_storage.start_periodic_health_check()
+    logger.info("定期健康检查已启动")
+
     app = create_app()
     config = get_config()
 

@@ -117,3 +117,16 @@ class EntityRelationship(Base):
     # 关系
     subject = relationship("Entity", foreign_keys=[subject_id], back_populates="relationships_as_subject")
     object = relationship("Entity", foreign_keys=[object_id], back_populates="relationships_as_object")
+
+
+class Feedback(Base):
+    """用户反馈模型"""
+
+    __tablename__ = "feedback"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id = Column(String)
+    feedback_type = Column(String)
+    content = Column(Text)
+    feedback_metadata = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)

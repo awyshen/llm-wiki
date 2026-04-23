@@ -22,6 +22,7 @@
                 <li><a href="#browse" class="nav-link">📚 Wiki浏览</a></li>
                 <li><a href="#search" class="nav-link">🔍 高级搜索</a></li>
                 <li><a href="#graph" class="nav-link">🧠 知识图谱</a></li>
+                <li><a href="#dialog" class="nav-link">💬 对话系统</a></li>
                 <li><a href="#status" class="nav-link">📊 系统状态</a></li>
             </ul>
         </nav>
@@ -172,6 +173,38 @@
                     <div id="export-output" class="output"></div>
 
                     <div id="graph-container" class="graph-container"></div>
+                </div>
+            </section>
+
+            <!-- 对话系统 -->
+            <section id="dialog" class="section" style="display: none;">
+                <h2>💬 对话系统</h2>
+                <div class="card">
+                    <h3>创建对话会话</h3>
+                    <div class="form-group">
+                        <input type="text" id="document-id" placeholder="文档ID（可选）" class="input">
+                        <input type="text" id="wiki-page-id" placeholder="Wiki页面ID（可选）" class="input">
+                        <button id="create-session-btn" class="btn btn-primary">创建会话</button>
+                    </div>
+                    
+                    <h3>对话管理</h3>
+                    <div class="form-group">
+                        <input type="text" id="session-id" placeholder="会话ID" class="input">
+                        <button id="get-session-btn" class="btn btn-secondary">获取会话</button>
+                        <button id="delete-session-btn" class="btn btn-danger">删除会话</button>
+                    </div>
+                    
+                    <h3>对话历史</h3>
+                    <div id="dialog-history" class="chat-container"></div>
+                    
+                    <h3>发送消息</h3>
+                    <div class="form-group">
+                        <textarea id="message-input" placeholder="输入消息" class="textarea" rows="3"></textarea>
+                        <button id="send-message-btn" class="btn btn-primary">发送</button>
+                    </div>
+                    
+                    <h3>会话列表</h3>
+                    <div id="session-list" class="table-container"></div>
                 </div>
             </section>
 

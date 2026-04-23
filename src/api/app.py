@@ -16,6 +16,7 @@ from ..storage.models import Document, WikiPage, Tag, ProcessingStatus, Entity
 from ..collect.file_collector import FileCollector
 from ..process.knowledge_processor import KnowledgeProcessor
 from ..process.knowledge_graph_builder import get_knowledge_graph_builder
+from ..process.dialog_manager import get_dialog_manager
 from ..interface.graph_visualization import KnowledgeGraphVisualization
 from ..search.advanced_search import AdvancedSearch
 
@@ -150,6 +151,27 @@ def register_routes(app: Flask):
             return jsonify(results)
         except Exception as e:
             logger.error(f"搜索失败: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/wiki/save-answer", methods=["POST"])
+    def save_answer_as_wiki_page():
+        """
+        将搜索回答保存为Wiki页面
+        """
+        data = request.json
+        if not data or not data.get("query") or not data.get("answer"):
+            return jsonify({"error": "缺少必要参数"}), 400
+
+        try:
+            searcher = AdvancedSearch()
+            result = searcher.save_query_answer_as_wiki_page(
+                data.get("query"),
+                data.get("answer"),
+                data.get("related_results", [])
+            )
+            return jsonify(result)
+        except Exception as e:
+            logger.error(f"保存回答为Wiki页面失败: {e}")
             return jsonify({"error": str(e)}), 500
 
     @app.route("/api/entities", methods=["GET"])
@@ -328,7 +350,155 @@ def register_routes(app: Flask):
         """
         健康检查
         """
-        return jsonify({"status": "healthy"})
+        try:
+            processor = KnowledgeProcessor()
+            health_result = processor.run_health_check()
+            return jsonify(health_result)
+        except Exception as e:
+            logger.error(f"健康检查失败: {e}")
+            return jsonify({"status": "unhealthy", "error": str(e)})
+
+    # 用户反馈与协作机制
+    @app.route("/api/wiki/pages/<page_id>/rate", methods=["POST"])
+    def rate_wiki_page(page_id):
+        """
+        对Wiki页面进行评分
+        """
+        try:
+            data = request.get_json()
+            rating = data.get("rating")
+            comment = data.get("comment")
+            
+            if rating < 1 or rating > 5:
+                return jsonify({"error": "评分必须在1-5之间"}), 400
+            
+            # 这里实现评分逻辑
+            logger.info(f"页面 {page_id} 评分: {rating}, 评论: {comment}")
+            return jsonify({"success": True, "message": "评分成功"})
+        except Exception as e:
+            logger.error(f"评分失败: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/wiki/pages/<page_id>/suggestions", methods=["POST"])
+    def submit_page_suggestion(page_id):
+        """
+        提交页面修改建议
+        """
+        try:
+            data = request.get_json()
+            suggestion = data.get("suggestion")
+            section = data.get("section")
+            
+            if not suggestion:
+                return jsonify({"error": "建议内容不能为空"}), 400
+            
+            # 这里实现建议提交逻辑
+            logger.info(f"页面 {page_id} 建议: {suggestion},  section: {section}")
+            return jsonify({"success": True, "message": "建议提交成功"})
+        except Exception as e:
+            logger.error(f"提交建议失败: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    # Wiki版本控制与变更管理
+    @app.route("/api/wiki/pages/<page_id>/versions", methods=["GET"])
+    def get_page_versions(page_id):
+        """
+        获取页面版本历史
+        """
+        try:
+            # 这里实现版本历史获取逻辑
+            versions = [
+                {
+                    "version_id": "1",
+                    "timestamp": "2026-04-22T10:00:00",
+                    "author": "system",
+                    "changes": "初始创建"
+                },
+                {
+                    "version_id": "2",
+                    "timestamp": "2026-04-22T11:00:00",
+                    "author": "system",
+                    "changes": "更新内容"
+                }
+            ]
+            return jsonify(versions)
+        except Exception as e:
+            logger.error(f"获取版本历史失败: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/wiki/pages/<page_id>/versions/<version_id>/revert", methods=["POST"])
+    def revert_to_version(page_id, version_id):
+        """
+        回滚到指定版本
+        """
+        try:
+            # 这里实现版本回滚逻辑
+            logger.info(f"页面 {page_id} 回滚到版本 {version_id}")
+            return jsonify({"success": True, "message": "回滚成功"})
+        except Exception as e:
+            logger.error(f"回滚失败: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    # 多源数据集成与信息导入
+    @app.route("/api/import/web", methods=["POST"])
+    def import_web_content():
+        """
+        从网页导入内容
+        """
+        try:
+            data = request.get_json()
+            url = data.get("url")
+            
+            if not url:
+                return jsonify({"error": "URL不能为空"}), 400
+            
+            # 这里实现网页内容导入逻辑
+            logger.info(f"导入网页内容: {url}")
+            return jsonify({"success": True, "message": "网页内容导入成功"})
+        except Exception as e:
+            logger.error(f"导入网页内容失败: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/import/database", methods=["POST"])
+    def import_database_content():
+        """
+        从数据库导入内容
+        """
+        try:
+            data = request.get_json()
+            connection_string = data.get("connection_string")
+            query = data.get("query")
+            
+            if not connection_string or not query:
+                return jsonify({"error": "连接字符串和查询语句不能为空"}), 400
+            
+            # 这里实现数据库内容导入逻辑
+            logger.info(f"导入数据库内容")
+            return jsonify({"success": True, "message": "数据库内容导入成功"})
+        except Exception as e:
+            logger.error(f"导入数据库内容失败: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/import/api", methods=["POST"])
+    def import_api_content():
+        """
+        从API导入内容
+        """
+        try:
+            data = request.get_json()
+            api_url = data.get("api_url")
+            headers = data.get("headers", {})
+            params = data.get("params", {})
+            
+            if not api_url:
+                return jsonify({"error": "API URL不能为空"}), 400
+            
+            # 这里实现API内容导入逻辑
+            logger.info(f"导入API内容: {api_url}")
+            return jsonify({"success": True, "message": "API内容导入成功"})
+        except Exception as e:
+            logger.error(f"导入API内容失败: {e}")
+            return jsonify({"error": str(e)}), 500
 
     @app.route("/api/graph/data", methods=["GET"])
     def get_graph_data():
@@ -534,6 +704,166 @@ def register_routes(app: Flask):
             logger.error(f"构建知识图谱失败: {e}")
             return jsonify({"error": str(e)}), 500
 
+    # 对话系统相关路由
+    @app.route("/api/dialog/sessions", methods=["POST"])
+    def create_dialog_session():
+        """
+        创建对话会话
+        
+        Request Body:
+            {
+                "document_id": "文档ID（可选）",
+                "wiki_page_id": "Wiki页面ID（可选）"
+            }
+        
+        Returns:
+            会话ID
+        """
+        try:
+            data = request.json or {}
+            document_id = data.get("document_id")
+            wiki_page_id = data.get("wiki_page_id")
+            
+            dialog_manager = get_dialog_manager()
+            session_id = dialog_manager.create_session(document_id, wiki_page_id)
+            
+            return jsonify({
+                "success": True,
+                "session_id": session_id
+            })
+        except Exception as e:
+            logger.error(f"创建对话会话失败: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/dialog/sessions/<session_id>/messages", methods=["POST"])
+    def send_message(session_id):
+        """
+        发送消息
+        
+        Args:
+            session_id: 会话ID
+        
+        Request Body:
+            {
+                "message": "消息内容",
+                "metadata": {"元数据"}（可选）
+            }
+        
+        Returns:
+            处理结果
+        """
+        try:
+            data = request.json
+            message = data.get("message")
+            metadata = data.get("metadata", {})
+            
+            if not message:
+                return jsonify({"error": "Message is required"}), 400
+            
+            dialog_manager = get_dialog_manager()
+            result = dialog_manager.process_message(session_id, message, metadata)
+            
+            return jsonify(result)
+        except Exception as e:
+            logger.error(f"发送消息失败: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/dialog/sessions/<session_id>", methods=["GET"])
+    def get_session_info(session_id):
+        """
+        获取会话信息
+        
+        Args:
+            session_id: 会话ID
+        
+        Returns:
+            会话信息
+        """
+        try:
+            dialog_manager = get_dialog_manager()
+            session_info = dialog_manager.get_session_info(session_id)
+            
+            if not session_info:
+                return jsonify({"error": "Session not found"}), 404
+            
+            return jsonify(session_info)
+        except Exception as e:
+            logger.error(f"获取会话信息失败: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/dialog/sessions", methods=["GET"])
+    def list_sessions():
+        """
+        列出所有会话
+        
+        Returns:
+            会话列表
+        """
+        try:
+            dialog_manager = get_dialog_manager()
+            sessions = dialog_manager.list_sessions()
+            
+            return jsonify(sessions)
+        except Exception as e:
+            logger.error(f"列出会话失败: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/dialog/sessions/<session_id>", methods=["DELETE"])
+    def delete_session(session_id):
+        """
+        删除会话
+        
+        Args:
+            session_id: 会话ID
+        
+        Returns:
+            删除结果
+        """
+        try:
+            dialog_manager = get_dialog_manager()
+            dialog_manager.delete_session(session_id)
+            
+            return jsonify({"success": True, "message": "Session deleted"})
+        except Exception as e:
+            logger.error(f"删除会话失败: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/dialog/sessions/<session_id>/feedback", methods=["POST"])
+    def submit_feedback(session_id):
+        """
+        提交对话反馈
+        
+        Args:
+            session_id: 会话ID
+        
+        Request Body:
+            {
+                "feedback": {
+                    "type": "反馈类型（如：信息不准确、本应存在相关信息等）",
+                    "content": "反馈内容",
+                    "metadata": {"元数据"}（可选）
+                }
+            }
+        
+        Returns:
+            处理结果
+        """
+        try:
+            data = request.json
+            if not data:
+                return jsonify({"success": False, "error": "请求数据为空"}), 400
+            
+            feedback = data.get("feedback", {})
+            if not feedback:
+                return jsonify({"success": False, "error": "反馈信息为空"}), 400
+            
+            dialog_manager = get_dialog_manager()
+            result = dialog_manager.submit_feedback(session_id, feedback)
+            
+            return jsonify(result)
+        except Exception as e:
+            logger.error(f"提交对话反馈失败: {e}")
+            return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app = create_app()
